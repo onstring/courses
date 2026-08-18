@@ -1,0 +1,1528 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Live Migration in Nova — The Message Flow</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400;1,9..40,500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <style>
+  /* ── DESIGN TOKENS ─────────────────────────────────────────── */
+  :root {
+    --color-bg:             #FAF7F2;
+    --color-bg-warm:        #F5F0E8;
+    --color-bg-code:        #1E1E2E;
+    --color-text:           #2C2A28;
+    --color-text-secondary: #6B6560;
+    --color-text-muted:     #9E9790;
+    --color-border:         #E5DFD6;
+    --color-border-light:   #EEEBE5;
+    --color-surface:        #FFFFFF;
+    --color-surface-warm:   #FDF9F3;
+
+    /* ACCENT — forest green, fitting for OpenStack infrastructure */
+    --color-accent:         #2D8B55;
+    --color-accent-hover:   #246E44;
+    --color-accent-light:   #E8F5EE;
+    --color-accent-muted:   #5FA77D;
+
+    --color-success:        #2D8B55;
+    --color-success-light:  #E8F5EE;
+    --color-error:          #C93B3B;
+    --color-error-light:    #FDE8E8;
+    --color-info:           #2A7B9B;
+    --color-info-light:     #E4F2F7;
+
+    --color-actor-1:        #D94F30;
+    --color-actor-2:        #2A7B9B;
+    --color-actor-3:        #7B6DAA;
+    --color-actor-4:        #D4A843;
+    --color-actor-5:        #2D8B55;
+
+    --font-display: 'Bricolage Grotesque', Georgia, serif;
+    --font-body:    'DM Sans', -apple-system, sans-serif;
+    --font-mono:    'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+
+    --text-xs:   0.75rem;
+    --text-sm:   0.875rem;
+    --text-base: 1rem;
+    --text-lg:   1.125rem;
+    --text-xl:   1.25rem;
+    --text-2xl:  1.5rem;
+    --text-3xl:  1.875rem;
+    --text-4xl:  2.25rem;
+    --text-5xl:  3rem;
+    --text-6xl:  3.75rem;
+
+    --leading-tight:  1.15;
+    --leading-snug:   1.3;
+    --leading-normal: 1.6;
+    --leading-loose:  1.8;
+
+    --space-1:  0.25rem; --space-2:  0.5rem; --space-3:  0.75rem;
+    --space-4:  1rem;    --space-5:  1.25rem; --space-6:  1.5rem;
+    --space-8:  2rem;    --space-10: 2.5rem;  --space-12: 3rem;
+    --space-16: 4rem;    --space-20: 5rem;    --space-24: 6rem;
+
+    --content-width:      800px;
+    --content-width-wide: 1000px;
+    --nav-height:         50px;
+
+    --radius-sm:   8px;  --radius-md:   12px;
+    --radius-lg:   16px; --radius-full: 9999px;
+
+    --shadow-sm: 0 1px 2px rgba(44,42,40,0.05);
+    --shadow-md: 0 4px 12px rgba(44,42,40,0.08);
+    --shadow-lg: 0 8px 24px rgba(44,42,40,0.10);
+    --shadow-xl: 0 16px 48px rgba(44,42,40,0.12);
+
+    --ease-out:    cubic-bezier(0.16,1,0.3,1);
+    --ease-in-out: cubic-bezier(0.65,0,0.35,1);
+    --duration-fast:   150ms;
+    --duration-normal: 300ms;
+    --duration-slow:   500ms;
+    --stagger-delay:   120ms;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-snap-type: y proximity; scroll-behavior: smooth; }
+  body {
+    font-family: var(--font-body);
+    font-size: var(--text-base);
+    color: var(--color-text);
+    line-height: var(--leading-normal);
+    background: var(--color-bg);
+    background-image: radial-gradient(ellipse at 20% 50%, rgba(45,139,85,0.04) 0%, transparent 50%);
+  }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: var(--radius-full); }
+
+  pre, code { white-space: pre-wrap; word-break: break-word; overflow-x: hidden; }
+  .translation-code::-webkit-scrollbar, pre::-webkit-scrollbar { display: none; }
+
+  .code-keyword  { color: #CBA6F7; }
+  .code-string   { color: #A6E3A1; }
+  .code-function { color: #89B4FA; }
+  .code-comment  { color: #6C7086; }
+  .code-number   { color: #FAB387; }
+  .code-property { color: #F9E2AF; }
+  .code-operator { color: #94E2D5; }
+  .code-class    { color: #F9E2AF; }
+  .code-line     { display: block; }
+
+  /* ── NAV ── */
+  .nav {
+    position: fixed; top: 0; left: 0; right: 0;
+    height: var(--nav-height); z-index: 1000;
+    background: rgba(250,247,242,0.92); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--color-border-light);
+  }
+  .progress-bar { position: absolute; bottom: 0; left: 0; height: 2px; width: 0%; background: var(--color-accent); transition: width 100ms linear; }
+  .nav-inner { max-width: var(--content-width-wide); margin: 0 auto; padding: 0 var(--space-6); height: 100%; display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
+  .nav-title { font-family: var(--font-display); font-size: var(--text-sm); font-weight: 600; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; }
+  .nav-dots { display: flex; align-items: center; gap: var(--space-2); }
+  .nav-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--color-text-muted); background: transparent; cursor: pointer; transition: all var(--duration-fast); position: relative; }
+  .nav-dot::after { content: attr(data-tooltip); position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: var(--color-bg-code); color: #CDD6F4; font-family: var(--font-body); font-size: var(--text-xs); white-space: nowrap; padding: var(--space-1) var(--space-3); border-radius: var(--radius-sm); pointer-events: none; opacity: 0; transition: opacity var(--duration-fast); }
+  .nav-dot:hover::after { opacity: 1; }
+  .nav-dot.active { border-color: var(--color-accent); background: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-light); }
+  .nav-dot.visited { border-color: var(--color-accent-muted); background: var(--color-accent-muted); }
+
+  /* ── MODULE ── */
+  .module { min-height: 100dvh; min-height: 100vh; scroll-snap-align: start; padding: var(--space-16) var(--space-6); padding-top: calc(var(--nav-height) + var(--space-12)); }
+  .module-content { max-width: var(--content-width); margin: 0 auto; }
+  .module-header { margin-bottom: var(--space-12); }
+  .module-number { display: block; font-family: var(--font-display); font-size: var(--text-6xl); font-weight: 800; color: var(--color-accent); opacity: 0.15; line-height: 1; margin-bottom: var(--space-2); }
+  .module-title { font-family: var(--font-display); font-size: var(--text-4xl); font-weight: 700; line-height: var(--leading-tight); color: var(--color-text); }
+  .module-subtitle { margin-top: var(--space-3); font-size: var(--text-lg); color: var(--color-text-secondary); line-height: var(--leading-snug); }
+  .screen { margin-bottom: var(--space-16); }
+  .screen-heading { font-family: var(--font-display); font-size: var(--text-2xl); font-weight: 600; color: var(--color-text); margin-bottom: var(--space-6); line-height: var(--leading-snug); }
+  p { margin-bottom: var(--space-4); }
+  p:last-child { margin-bottom: 0; }
+  .lead { font-size: var(--text-lg); }
+
+  /* ── ANIMATIONS ── */
+  .animate-in { opacity: 0; transform: translateY(20px); transition: opacity var(--duration-slow) var(--ease-out), transform var(--duration-slow) var(--ease-out); }
+  .animate-in.visible { opacity: 1; transform: translateY(0); }
+  .stagger-children > .animate-in { transition-delay: calc(var(--stagger-index, 0) * var(--stagger-delay)); }
+
+  /* ── HERO ── */
+  .hero { min-height: 100vh; display: flex; flex-direction: column; justify-content: center; padding: var(--space-16) var(--space-6); max-width: var(--content-width); margin: 0 auto; }
+  .hero-eyebrow { font-family: var(--font-mono); font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.15em; color: var(--color-accent); margin-bottom: var(--space-4); }
+  .hero-title { font-family: var(--font-display); font-size: var(--text-6xl); font-weight: 800; line-height: 1.05; margin-bottom: var(--space-6); }
+  .hero-sub { font-size: var(--text-xl); color: var(--color-text-secondary); max-width: 640px; margin-bottom: var(--space-8); }
+  .hero-meta { display: flex; gap: var(--space-6); flex-wrap: wrap; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-text-muted); }
+  .hero-meta span { display: flex; align-items: center; gap: var(--space-2); }
+
+  /* ── TRANSLATION ── */
+  .translation-block { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-radius: var(--radius-md); overflow: hidden; box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .translation-code { background: var(--color-bg-code); color: #CDD6F4; padding: var(--space-6); font-family: var(--font-mono); font-size: var(--text-sm); line-height: 1.7; position: relative; overflow-x: hidden; }
+  .translation-english { background: var(--color-surface-warm); padding: var(--space-6); font-size: var(--text-sm); line-height: 1.7; border-left: 3px solid var(--color-accent); }
+  .translation-label { position: absolute; top: var(--space-2); right: var(--space-3); font-family: var(--font-mono); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.5; }
+  .translation-english .translation-label { position: static; display: block; margin-bottom: var(--space-3); color: var(--color-text-muted); }
+  .translation-english strong { color: var(--color-text); }
+  .file-ref { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-accent); background: var(--color-accent-light); padding: 1px 6px; border-radius: 4px; }
+
+  /* ── FLOW ANIMATION ── */
+  .flow-animation { position: relative; background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-8); box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .flow-actors { display: flex; justify-content: center; align-items: center; gap: var(--space-4); margin-bottom: var(--space-8); flex-wrap: wrap; }
+  .flow-actor { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); transition: all var(--duration-normal) var(--ease-out); }
+  .flow-actor-icon { width: 54px; height: 54px; border-radius: var(--radius-md); background: var(--color-bg-warm); border: 2px solid var(--color-border); display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-size: var(--text-base); font-weight: 700; transition: all var(--duration-normal) var(--ease-out); color: var(--color-text-secondary); }
+  .flow-actor span { font-size: var(--text-xs); color: var(--color-text-secondary); font-family: var(--font-mono); text-align: center; }
+  .flow-actor.active .flow-actor-icon { border-color: var(--color-accent); background: var(--color-accent-light); box-shadow: 0 0 0 3px var(--color-accent-light), 0 0 20px rgba(45,139,85,0.18); transform: scale(1.12); color: var(--color-accent-hover); }
+  .flow-packet { width: 16px; height: 16px; border-radius: 50%; background: var(--color-accent); position: absolute; pointer-events: none; display: none; box-shadow: 0 0 8px rgba(45,139,85,0.6); z-index: 5; }
+  .flow-step-label { text-align: center; font-size: var(--text-sm); color: var(--color-text); min-height: 3em; padding: var(--space-3) var(--space-4); background: var(--color-bg-warm); border-radius: var(--radius-sm); margin-bottom: var(--space-6); line-height: var(--leading-normal); }
+  .flow-controls { display: flex; align-items: center; gap: var(--space-3); }
+  .flow-progress { margin-left: auto; font-size: var(--text-xs); color: var(--color-text-muted); font-family: var(--font-mono); }
+
+  /* ── ARCH DIAGRAM ── */
+  .arch-diagram { background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-8); box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .arch-zone { border: 1px dashed var(--color-border); border-radius: var(--radius-md); padding: var(--space-6); margin-bottom: var(--space-4); }
+  .arch-zone-label { font-family: var(--font-mono); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-muted); margin-bottom: var(--space-4); }
+  .arch-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+  .arch-component { display: inline-flex; flex-direction: column; align-items: center; gap: var(--space-2); padding: var(--space-4); background: var(--color-surface-warm); border: 1px solid var(--color-border); border-radius: var(--radius-md); cursor: pointer; margin: var(--space-2); transition: all var(--duration-fast); font-size: var(--text-sm); min-width: 120px; }
+  .arch-component:hover, .arch-component.active { border-color: var(--color-accent); background: var(--color-accent-light); transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+  .arch-component strong { font-family: var(--font-display); }
+  .arch-component small { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+  .arch-description { margin-top: var(--space-4); padding: var(--space-4); background: var(--color-bg-warm); border-radius: var(--radius-sm); font-size: var(--text-sm); color: var(--color-text-secondary); min-height: 2.5em; }
+
+  /* ── CALLOUT ── */
+  .callout { display: flex; gap: var(--space-4); padding: var(--space-5); border-radius: var(--radius-md); margin: var(--space-6) 0; border-left: 4px solid; }
+  .callout-accent  { background: var(--color-accent-light);  border-color: var(--color-accent); }
+  .callout-info    { background: var(--color-info-light);    border-color: var(--color-info); }
+  .callout-warning { background: var(--color-error-light);   border-color: var(--color-error); }
+  .callout-success { background: var(--color-success-light); border-color: var(--color-success); }
+  .callout-icon { font-size: 1.25rem; flex-shrink: 0; margin-top: 2px; }
+  .callout-title { display: block; font-weight: 700; margin-bottom: var(--space-1); }
+  .callout-content p { font-size: var(--text-sm); margin: 0; color: var(--color-text-secondary); }
+
+  /* ── STEP CARDS ── */
+  .step-cards { display: flex; flex-direction: column; gap: var(--space-3); margin: var(--space-6) 0; }
+  .step-card { display: flex; align-items: flex-start; gap: var(--space-4); padding: var(--space-4) var(--space-5); background: var(--color-surface); border-radius: var(--radius-md); border-left: 3px solid var(--color-accent); box-shadow: var(--shadow-sm); }
+  .step-num { width: 32px; height: 32px; border-radius: 50%; background: var(--color-accent); color: white; font-weight: 700; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); flex-shrink: 0; }
+  .step-body strong { display: block; font-weight: 600; margin-bottom: var(--space-1); }
+  .step-body p { margin: 0; color: var(--color-text-secondary); font-size: var(--text-sm); }
+  .step-body .src { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+
+  /* ── PATTERN CARDS ── */
+  .pattern-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-4); margin: var(--space-6) 0; }
+  .pattern-card { background: var(--color-surface); border-radius: var(--radius-md); padding: var(--space-6); box-shadow: var(--shadow-sm); border-top: 3px solid var(--color-accent); transition: transform var(--duration-normal) var(--ease-out), box-shadow var(--duration-normal); }
+  .pattern-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-md); }
+  .pattern-icon { font-size: 1.5rem; margin-bottom: var(--space-3); }
+  .pattern-title { font-family: var(--font-display); font-size: var(--text-base); font-weight: 700; margin-bottom: var(--space-2); }
+  .pattern-desc { font-size: var(--text-sm); color: var(--color-text-secondary); line-height: var(--leading-normal); margin: 0; }
+
+  /* ── STATE TIMELINE ── */
+  .state-track { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: var(--space-6) 0; }
+  .state-pill { font-family: var(--font-mono); font-size: var(--text-xs); padding: var(--space-2) var(--space-3); border-radius: var(--radius-full); background: var(--color-surface); border: 1px solid var(--color-border); }
+  .state-pill.vm { background: var(--color-accent-light); border-color: var(--color-accent-muted); color: var(--color-accent-hover); font-weight: 600; }
+  .state-pill.task { background: var(--color-surface-warm); color: var(--color-text-secondary); }
+  .state-pill.done { background: var(--color-success-light); border-color: var(--color-success); color: var(--color-success); font-weight: 600; }
+  .state-arrow { color: var(--color-text-muted); }
+
+  /* ── OPS CHECK (terminal verification panel) ── */
+  .ops-check { background: var(--color-bg-code); border-radius: var(--radius-md); margin: var(--space-6) 0; box-shadow: var(--shadow-md); overflow: hidden; }
+  .ops-check-head { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-5); background: rgba(255,255,255,0.05); border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .ops-check-badge { font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #1E1E2E; background: #A6E3A1; padding: 2px 8px; border-radius: 4px; flex-shrink: 0; }
+  .ops-check-title { font-size: var(--text-sm); color: #CDD6F4; font-family: var(--font-body); }
+  .ops-check-body { padding: var(--space-5); font-family: var(--font-mono); font-size: var(--text-sm); line-height: 1.75; color: #CDD6F4; }
+  .ops-check-body .prompt { color: #6C7086; user-select: none; }
+  .ops-check-body .cmd { color: #A6E3A1; }
+  .ops-check-body .out { color: #9399B2; }
+  .ops-check-body .hl { color: #F9E2AF; }
+  .ops-check-body .note { color: #89B4FA; font-style: italic; }
+
+  /* ── QUIZ ── */
+  .quiz-container { background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-8); box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .quiz-question-block { margin-bottom: var(--space-8); }
+  .quiz-question-block:last-of-type { margin-bottom: 0; }
+  .quiz-question { font-family: var(--font-display); font-size: var(--text-lg); font-weight: 600; margin-bottom: var(--space-4); line-height: var(--leading-snug); }
+  .quiz-options { display: flex; flex-direction: column; gap: var(--space-2); }
+  .quiz-option { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: 2px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); cursor: pointer; width: 100%; text-align: left; font-family: var(--font-body); font-size: var(--text-base); transition: border-color var(--duration-fast), background var(--duration-fast); }
+  .quiz-option:hover:not(:disabled) { border-color: var(--color-accent-muted); }
+  .quiz-option.selected { border-color: var(--color-accent); background: var(--color-accent-light); }
+  .quiz-option.correct  { border-color: var(--color-success); background: var(--color-success-light); }
+  .quiz-option.incorrect{ border-color: var(--color-error);   background: var(--color-error-light); }
+  .quiz-option:disabled { cursor: default; }
+  .quiz-option-radio { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--color-border); flex-shrink: 0; transition: all var(--duration-fast); }
+  .quiz-option.selected .quiz-option-radio { border-color: var(--color-accent); background: var(--color-accent); box-shadow: inset 0 0 0 3px white; }
+  .quiz-option.correct .quiz-option-radio  { border-color: var(--color-success); background: var(--color-success); box-shadow: inset 0 0 0 3px white; }
+  .quiz-option.incorrect .quiz-option-radio{ border-color: var(--color-error);   background: var(--color-error);   box-shadow: inset 0 0 0 3px white; }
+  .quiz-feedback { max-height: 0; overflow: hidden; opacity: 0; transition: max-height var(--duration-normal), opacity var(--duration-normal); font-size: var(--text-sm); border-radius: var(--radius-sm); }
+  .quiz-feedback.show { max-height: 240px; opacity: 1; padding: var(--space-3); margin-top: var(--space-2); }
+  .quiz-feedback.success { background: var(--color-success-light); color: var(--color-success); }
+  .quiz-feedback.error   { background: var(--color-error-light);   color: var(--color-error); }
+  .quiz-feedback.warning { background: var(--color-info-light);    color: var(--color-info); }
+  .quiz-check-btn, .quiz-reset-btn { margin-top: var(--space-6); padding: var(--space-3) var(--space-6); border-radius: var(--radius-sm); font-family: var(--font-body); font-size: var(--text-sm); font-weight: 600; cursor: pointer; border: none; transition: background var(--duration-fast), transform var(--duration-fast); }
+  .quiz-check-btn { background: var(--color-accent); color: white; margin-right: var(--space-3); }
+  .quiz-check-btn:hover { background: var(--color-accent-hover); transform: translateY(-1px); }
+  .quiz-reset-btn { background: var(--color-surface); color: var(--color-text-secondary); border: 1px solid var(--color-border); }
+  .quiz-reset-btn:hover { border-color: var(--color-accent-muted); }
+
+  /* ── DND ── */
+  .dnd-container { margin: var(--space-8) 0; }
+  .dnd-chips { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-bottom: var(--space-6); }
+  .dnd-chip { padding: var(--space-2) var(--space-4); background: var(--color-accent); color: white; border-radius: var(--radius-full); font-size: var(--text-sm); font-weight: 600; cursor: grab; user-select: none; transition: opacity var(--duration-fast), transform var(--duration-fast); }
+  .dnd-chip:active { cursor: grabbing; transform: scale(1.05); }
+  .dnd-chip.dragging { opacity: 0.4; }
+  .dnd-chip.placed { opacity: 0.3; pointer-events: none; }
+  .dnd-zones { display: flex; flex-direction: column; gap: var(--space-4); }
+  .dnd-zone { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); background: var(--color-surface); }
+  .dnd-zone-label { font-size: var(--text-sm); color: var(--color-text-secondary); margin-bottom: var(--space-3); }
+  .dnd-zone-target { min-height: 40px; border: 2px dashed var(--color-border); border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; font-size: var(--text-sm); color: var(--color-text-muted); transition: border-color var(--duration-fast), background var(--duration-fast); }
+  .dnd-zone-target.drag-over { border-color: var(--color-accent); background: var(--color-accent-light); }
+  .dnd-zone-target.correct-placed { border-color: var(--color-success); background: var(--color-success-light); color: var(--color-success); font-weight: 600; }
+  .dnd-zone-target.incorrect-placed{ border-color: var(--color-error); background: var(--color-error-light); }
+  .btn { padding: var(--space-2) var(--space-5); border-radius: var(--radius-sm); border: 1px solid var(--color-border); background: var(--color-surface); font-family: var(--font-body); font-size: var(--text-sm); font-weight: 600; cursor: pointer; transition: all var(--duration-fast); color: var(--color-text-secondary); }
+  .btn:hover { border-color: var(--color-accent-muted); color: var(--color-accent); }
+  .btn-primary { background: var(--color-accent); color: white; border-color: var(--color-accent); }
+  .btn-primary:hover { background: var(--color-accent-hover); border-color: var(--color-accent-hover); color: white; }
+
+  /* ── GLOSSARY ── */
+  .term { border-bottom: 1.5px dashed var(--color-accent-muted); cursor: pointer; }
+  .term:hover, .term.active { border-bottom-color: var(--color-accent); color: var(--color-accent); }
+  .term-tooltip { position: fixed; background: var(--color-bg-code); color: #CDD6F4; padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); font-size: var(--text-sm); font-family: var(--font-body); line-height: var(--leading-normal); width: max(200px, min(320px, 80vw)); box-shadow: var(--shadow-lg); pointer-events: none; opacity: 0; transition: opacity var(--duration-fast); z-index: 10000; }
+  .term-tooltip::after { content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 6px solid transparent; border-top-color: var(--color-bg-code); }
+  .term-tooltip.visible { opacity: 1; }
+  .term-tooltip.flip::after { top: auto; bottom: 100%; border-top-color: transparent; border-bottom-color: var(--color-bg-code); }
+
+  .footer { text-align: center; padding: var(--space-16) var(--space-6); color: var(--color-text-muted); font-size: var(--text-sm); border-top: 1px solid var(--color-border-light); }
+
+  @media (max-width: 768px) {
+    :root { --text-4xl: 1.875rem; --text-5xl: 2.25rem; --text-6xl: 3rem; }
+    .translation-block { grid-template-columns: 1fr; }
+    .translation-english { border-left: none; border-top: 3px solid var(--color-accent); }
+    .pattern-cards { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 480px) {
+    :root { --text-4xl: 1.5rem; --text-5xl: 1.875rem; --text-6xl: 2.25rem; }
+    .module { padding: var(--space-8) var(--space-4); }
+    .pattern-cards { grid-template-columns: 1fr; }
+    .nav-title { max-width: 150px; }
+  }
+
+  @keyframes packetMove {
+    from { left: var(--packet-from-x); top: var(--packet-from-y); opacity: 0; }
+    20%  { opacity: 1; }
+    80%  { opacity: 1; }
+    to   { left: var(--packet-to-x); top: var(--packet-to-y); opacity: 0; }
+  }
+  </style>
+</head>
+<body>
+
+  <nav class="nav" id="nav">
+    <div class="progress-bar" id="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+    <div class="nav-inner">
+      <span class="nav-title">Live Migration</span>
+      <div class="nav-dots" id="nav-dots" role="tablist">
+        <button class="nav-dot" data-target="hero" data-tooltip="Start" role="tab" aria-label="Start"></button>
+        <button class="nav-dot" data-target="module-0" data-tooltip="The Cast of Characters" role="tab" aria-label="Module 0"></button>
+        <button class="nav-dot" data-target="module-1" data-tooltip="The API Phase" role="tab" aria-label="Module 1"></button>
+        <button class="nav-dot" data-target="module-2" data-tooltip="Conductor Sets Up" role="tab" aria-label="Module 2"></button>
+        <button class="nav-dot" data-target="module-3" data-tooltip="Cross-host Negotiation" role="tab" aria-label="Module 3"></button>
+        <button class="nav-dot" data-target="module-4" data-tooltip="The Transfer" role="tab" aria-label="Module 4"></button>
+        <button class="nav-dot" data-target="module-5" data-tooltip="The Cutover" role="tab" aria-label="Module 5"></button>
+        <button class="nav-dot" data-target="module-6" data-tooltip="The Full Journey" role="tab" aria-label="Module 6"></button>
+        <button class="nav-dot" data-target="module-7" data-tooltip="When It Goes Wrong" role="tab" aria-label="Module 7"></button>
+        <button class="nav-dot" data-target="module-8" data-tooltip="Check Yourself" role="tab" aria-label="Module 8"></button>
+      </div>
+    </div>
+  </nav>
+
+  <main id="main">
+
+  <!-- ════════════ HERO ════════════ -->
+  <section class="module" id="hero" style="background: var(--color-bg);">
+    <div class="hero">
+      <div class="hero-eyebrow animate-in">OpenStack Nova · Message Flow Walkthrough</div>
+      <h1 class="hero-title animate-in">Moving a running<br>machine without<br>turning it off</h1>
+      <p class="hero-sub animate-in">Live migration relocates a running instance from one compute host to another with almost no downtime. The conductor orchestrates with blocking RPC <em>calls</em>, the source and destination negotiate a handshake, libvirt streams the live guest memory across, and only once it lands on the destination do the network, storage and resource accounting follow. Traced from the real Nova source.</p>
+      <div class="hero-meta animate-in">
+        <span>⏱️ ~14 min read</span>
+        <span>🧩 6+ services</span>
+        <span>🔄 call · cast · REST</span>
+        <span>🔎 an ops check at every step</span>
+        <span>🖱️ Interactive</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 0 — CAST ════════════ -->
+  <section class="module" id="module-0" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">00</span>
+        <h1 class="module-title">The cast of characters</h1>
+        <p class="module-subtitle">Live migration is choreography. Before we trace the messages, meet the players, the two compute hosts that do the dance, and the three ways they talk.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Three ways to send a message</h2>
+          <p>Every interaction in this story travels over one of three channels. In live migration the distinction between a <em>call</em> and a <em>cast</em> is not a footnote — it <em>is</em> the plot.</p>
+          <div class="pattern-cards stagger-children">
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">📞</div>
+              <div class="pattern-title">RPC call — blocking</div>
+              <p class="pattern-desc">The sender drops a message on the queue and <strong>waits</strong> for a reply. Conductor's "can you take this guest?" checks are <span class="term" data-definition="A 'call' is a blocking RPC: the sender waits until the receiver finishes and returns a result. Conductor uses calls for the pre-checks because it needs migrate_data back.">calls</span> — it needs the <span class="term" data-definition="The object built by the destination and source pre-checks that carries everything forward: block_migration flag, volume-backed flag, vif details, port bindings.">migrate_data</span> back.</p>
+            </div>
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">📮</div>
+              <div class="pattern-title">RPC cast — fire and forget</div>
+              <p class="pattern-desc">The sender drops the message and moves on without waiting. The actual <code>live_migration</code> command is a <span class="term" data-definition="A 'cast' is fire-and-forget: the sender drops the message on the queue and moves on without waiting for a reply. The long transfer must not block conductor.">cast</span> — conductor cannot block for the minutes a transfer may take.</p>
+            </div>
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">🌐</div>
+              <div class="pattern-title">REST over HTTP</div>
+              <p class="pattern-desc">When Nova talks to another OpenStack project — Placement, Neutron, Cinder — it makes an ordinary HTTP REST request, just like a web app calling an API.</p>
+            </div>
+          </div>
+          <div class="callout callout-accent">
+            <div class="callout-icon">💡</div>
+            <div class="callout-content">
+              <span class="callout-title">The signature pattern: a nested call-back handshake</span>
+              <p>Conductor <strong>calls</strong> the <em>destination</em> compute, which in turn <strong>calls</strong> the <em>source</em> compute back. Two synchronous round trips nested inside each other, producing the <code>migrate_data</code> that drives the whole move. Nothing else in Nova looks quite like this.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Meet the services (click each one)</h2>
+          <p>These are the components a live migration passes through. Note that <em>two</em> compute services take part: the source you are leaving and the destination you are heading to. Click any box to learn its job.</p>
+          <div class="arch-diagram">
+            <div class="arch-zone">
+              <div class="arch-zone-label">Nova services — they speak RPC (call &amp; cast) to each other</div>
+              <div class="arch-row">
+                <div class="arch-component active" data-desc="The front door. Receives your os-migrateLive HTTP request, validates the target host if one was named, loads the instance's RequestSpec, flips task_state to MIGRATING (vm_state stays ACTIVE), records the action, and casts to the conductor. nova/compute/api.py live_migrate().">
+                  <strong>nova-api</strong><small>the front door</small>
+                </div>
+                <div class="arch-component" data-desc="The orchestrator. Creates the Migration record, moves the source Placement allocation onto that record, optionally calls the scheduler, runs the nested cross-host pre-checks, pre-binds Neutron ports on the destination, then casts the actual live_migration to the source compute. Driven by LiveMigrationTask.">
+                  <strong>nova-conductor</strong><small>the orchestrator</small>
+                </div>
+                <div class="arch-component" data-desc="The matchmaker. Only invoked when no host is forced. It picks a destination and claims resources there in Placement via select_destinations. If you forced a host, the scheduler is skipped entirely.">
+                  <strong>nova-scheduler</strong><small>the matchmaker</small>
+                </div>
+                <div class="arch-component" data-desc="The host you are leaving. It drives the migration: answers the source pre-check, submits _do_live_migration to a thread pool, calls pre_live_migration on the destination, invokes the libvirt driver, then runs _post_live_migration to activate the destination network, delete its volume attachment and free its allocation.">
+                  <strong>nova-compute (src)</strong><small>the host you leave</small>
+                </div>
+                <div class="arch-component" data-desc="The host you are arriving at. It runs pre_live_migration (new Cinder attachment, plug vifs), receives the streamed live guest, then post_live_migration_at_destination (finish port bindings, define the persistent domain, set instance.host to itself).">
+                  <strong>nova-compute (dst)</strong><small>the host you arrive at</small>
+                </div>
+              </div>
+            </div>
+            <div class="arch-zone">
+              <div class="arch-zone-label">Other OpenStack projects &amp; the hypervisor — reached over REST / driver calls</div>
+              <div class="arch-row">
+                <div class="arch-component" data-desc="The resource accountant. During the move the source allocation is re-keyed from the instance onto the migration record (move_allocations), while a fresh destination allocation is claimed against the instance. On success the source allocation is deleted; on rollback it is restored.">
+                  <strong>Placement</strong><small>resource accounting</small>
+                </div>
+                <div class="arch-component" data-desc="Networking. Using the multiple-port-binding extension, conductor pre-binds inactive port bindings on the destination (bind_ports_to_host). The source activates them at post time (migrate_instance_start -> activate_port_binding) — the network cutover.">
+                  <strong>Neutron</strong><small>networking</small>
+                </div>
+                <div class="arch-component" data-desc="Block storage. In pre_live_migration the destination creates a brand-new volume attachment (cinder v3.44), keeping the old source attachment id. On success the source attachment is deleted; on rollback the destination one is.">
+                  <strong>Cinder</strong><small>volumes</small>
+                </div>
+                <div class="arch-component" data-desc="The hypervisor library. It performs the actual migrate / migrateToURI3 of the live domain — copying running RAM and CPU state across — monitored by _live_migration_monitor until VIR_DOMAIN_JOB_COMPLETED.">
+                  <strong>libvirt</strong><small>the hypervisor</small>
+                </div>
+              </div>
+            </div>
+            <div class="arch-description">nova-api — the front door. Receives your os-migrateLive HTTP request, validates the target host if named, loads the RequestSpec, sets task_state=MIGRATING, and casts to the conductor.</div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The journey in one breath</h2>
+          <p>Here is the whole move compressed into five beats. The rest of the course unpacks each one.</p>
+          <div class="step-cards stagger-children">
+            <div class="step-card animate-in"><div class="step-num">1</div><div class="step-body"><strong>API accepts and casts</strong><p>nova-api sets <code>task_state=MIGRATING</code> (the VM keeps running), loads the RequestSpec, and casts to the conductor.</p></div></div>
+            <div class="step-card animate-in"><div class="step-num">2</div><div class="step-body"><strong>Conductor prepares the move</strong><p>It opens a Migration record, parks the source allocation on it, and picks/validates a destination.</p></div></div>
+            <div class="step-card animate-in"><div class="step-num">3</div><div class="step-body"><strong>The nested handshake</strong><p>Conductor CALLS the destination, which CALLS the source back, producing <code>migrate_data</code>. Conductor pre-binds Neutron ports, then CASTS the migration to the source.</p></div></div>
+            <div class="step-card animate-in"><div class="step-num">4</div><div class="step-body"><strong>libvirt streams the guest</strong><p>The source asks the destination to prepare storage and networking, then libvirt copies the live RAM/CPU across while a monitor watches.</p></div></div>
+            <div class="step-card animate-in"><div class="step-num">5</div><div class="step-body"><strong>Cutover and cleanup</strong><p>Once the guest runs on the destination, the network and volumes switch over, the instance's home is set to the destination, and the source allocation is freed.</p></div></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 1 — API PHASE ════════════ -->
+  <section class="module" id="module-1" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">01</span>
+        <h1 class="module-title">The API phase</h1>
+        <p class="module-subtitle">Your request lands at <span class="file-ref">nova/compute/api.py</span> <code>live_migrate()</code>. Nothing moves yet — this phase validates the target, loads the original scheduling request, and flips one flag.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">task_state goes to MIGRATING, RequestSpec loaded</h2>
+          <p>The instance is moved to <code>MIGRATING</code> only <em>after</em> the optional host validation, so a bad host name fails before the instance state changes. <code>vm_state</code> is never changed here — the VM is live the whole time. The original <span class="term" data-definition="The RequestSpec is the saved record of everything the scheduler needed to place the instance: flavor, image, networks, NUMA topology, PCI needs. Live migration reloads it to reschedule.">RequestSpec</span> is reloaded so the scheduler can run again if needed.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/api.py</span><br>
+<span class="code-keyword">if</span> host_name:<br>
+&nbsp;&nbsp;<span class="code-comment"># Validate the specified host before changing</span><br>
+&nbsp;&nbsp;<span class="code-comment"># the instance task state.</span><br>
+&nbsp;&nbsp;nodes = objects.ComputeNodeList.<span class="code-function">get_all_by_host</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;context, host_name)<br><br>
+request_spec = objects.RequestSpec.<span class="code-function">get_by_instance_uuid</span>(<br>&nbsp;&nbsp;context, instance.uuid)<br><br>
+instance.task_state = task_states.MIGRATING<br>
+instance.<span class="code-function">save</span>(expected_task_state=[<span class="code-keyword">None</span>])
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Confirm the host exists, load the original request, then mark the instance as migrating."</strong> The <code>expected_task_state=[None]</code> guard means we only proceed if the instance isn't already busy with another task. The guest stays <code>ACTIVE</code> and running throughout.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">force=False unsets the host so the scheduler still runs</h2>
+          <p>This is the subtle "forced host" logic. With the newer microversion, <code>force</code> is an explicit boolean. If <code>force is False</code> but a host was named, the host becomes a scheduler <em>hint</em> (<code>requested_destination</code>) rather than a hard target, so the scheduler filters still run against it.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/api.py</span><br>
+<span class="code-keyword">if</span> force <span class="code-keyword">is</span> <span class="code-keyword">False</span> <span class="code-keyword">and</span> host_name:<br>
+&nbsp;&nbsp;<span class="code-comment"># Unset the host to make sure we call the</span><br>
+&nbsp;&nbsp;<span class="code-comment"># scheduler from the conductor</span><br>
+&nbsp;&nbsp;<span class="code-comment"># LiveMigrationTask. Yes this is tightly-</span><br>
+&nbsp;&nbsp;<span class="code-comment"># coupled to behavior in conductor.</span><br>
+&nbsp;&nbsp;host_name = <span class="code-keyword">None</span><br>
+&nbsp;&nbsp;...<br>
+&nbsp;&nbsp;request_spec.requested_destination = destination
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Live migrate to host X but don't force it"</strong> means: still ask the scheduler, but only let it consider host X. Nova clears the host so the conductor takes the scheduling path, and stashes X as a requested destination hint. A true <em>force</em> skips the scheduler entirely.
+            </div>
+          </div>
+          <div class="callout callout-info">
+            <div class="callout-icon">🎯</div>
+            <div class="callout-content">
+              <span class="callout-title">Force vs hint</span>
+              <p>Forcing a host bypasses the scheduler's filters — useful but risky, because nothing checks the destination is sensible beyond a few hard guards. The default is to let the scheduler vet your choice.</p>
+            </div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">Right after the request — MIGRATING stamped, ledger not yet open</span></div>
+            <div class="ops-check-body">
+              <span class="prompt">$ </span><span class="cmd">openstack server show $UUID -c status -c OS-EXT-STS:task_state -c OS-EXT-STS:vm_state -c OS-EXT-SRV-ATTR:host</span><br>
+              <span class="out">| <span class="hl">MIGRATING</span> | <span class="hl">migrating</span> | active | qh2-rcc001 |   <span class="note"># vm_state stays active — the guest is still running</span></span><br>
+              <br>
+              <span class="note"># the migration ledger row is created by the CONDUCTOR — its existence proves the cast arrived</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack server migration list --server $UUID</span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT id, status FROM nova.migrations WHERE instance_uuid='$UUID' AND migration_type='live-migration' ORDER BY id DESC LIMIT 1;</span>  <span class="out">(cell DB)</span><br>
+              <br>
+              <span class="note"># task_state=migrating but NO migration row → the cast to nova-conductor was lost</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 2 — CONDUCTOR SETS UP ════════════ -->
+  <section class="module" id="module-2" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">02</span>
+        <h1 class="module-title">Conductor opens the ledger</h1>
+        <p class="module-subtitle">The conductor picks up the cast and builds the spine of the whole flow: a <span class="term" data-definition="A database object recording one move: its type (live-migration), source and destination compute, status, and instance. Placement allocations, status reporting and rollback all key off it.">Migration record</span>. Then it performs the trick at the heart of move-based allocations.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">A Migration record is created with status 'accepted'</h2>
+          <p><code>ComputeTaskManager._live_migrate</code> creates a <code>Migration</code> object (type <code>live-migration</code>, status <code>accepted</code>, source = current host) and wraps everything in a <code>LiveMigrationTask</code>. This object is the spine: allocations, status reporting, and post/rollback cleanup all key off it.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">conductor/manager.py</span><br>
+migration = objects.<span class="code-class">Migration</span>(<br>&nbsp;&nbsp;context=context.<span class="code-function">elevated</span>())<br>
+migration.dest_compute = destination<br>
+migration.status = <span class="code-string">'accepted'</span><br>
+migration.instance_uuid = instance.uuid<br>
+migration.source_compute = instance.host<br>
+migration.migration_type = \<br>&nbsp;&nbsp;fields.MigrationType.LIVE_MIGRATION
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Open a live-migration ledger entry."</strong> Record where we're coming from, where we (maybe) want to go, and that it's been accepted but not yet started. Every later step updates this record's status: <code>preparing</code>, <code>running</code>, <code>completed</code> or <code>error</code>.
+            </div>
+          </div>
+          <div class="state-track">
+            <span class="state-pill done">accepted</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill task">preparing</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill task">queued</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill task">running</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill done">completed</span>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Source allocation is parked on the migration UUID</h2>
+          <p><code>LiveMigrationTask._execute()</code> first runs sanity checks (instance active, no old NUMA, source host up), then calls <code>replace_allocation_with_migration</code>. This is the heart of move-based allocations: <code>move_allocations</code> re-keys the existing Placement allocation from <code>instance.uuid</code> to <code>migration.uuid</code>, so the source is "held by the migration" while the instance becomes an empty consumer ready to receive the destination allocation.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">conductor/tasks/migrate.py</span><br>
+success = reportclient.<span class="code-function">move_allocations</span>(<br>&nbsp;&nbsp;context, instance.uuid, migration.uuid)<br>
+<span class="code-keyword">if</span> <span class="code-keyword">not</span> success:<br>
+&nbsp;&nbsp;...<br>
+&nbsp;&nbsp;<span class="code-keyword">raise</span> exception.<span class="code-class">NoValidHost</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;reason=_(<span class="code-string">'Unable to replace instance claim on source'</span>))<br>
+...<br>
+<span class="code-keyword">return</span> source_cn, orig_alloc
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Hand the instance's current reservation over to the migration record."</strong> In Placement, the source CPU/RAM/disk reservation moves from being keyed by the instance to being keyed by the migration. Now the instance "owns" nothing, so the scheduler can give it a fresh reservation on the destination without a conflict.
+            </div>
+          </div>
+          <div class="callout callout-accent">
+            <div class="callout-icon">📒</div>
+            <div class="callout-content">
+              <span class="callout-title">Why move the allocation at all?</span>
+              <p>A Placement consumer (the instance) can only hold one allocation per resource provider. If the instance kept the source claim, claiming the destination against the same consumer would conflict. Parking the source claim on the migration record frees the instance to receive the destination claim.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Scheduler path vs forced-host path</h2>
+          <p>If no destination was forced, <code>_find_destination</code> calls the scheduler, which creates the destination allocation against the instance. If a host was forced, the scheduler is skipped and <code>claim_resources_on_destination</code> reproduces the source allocation on the destination node directly — with <code>consumer_generation=None</code> because the instance is now an empty consumer.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">conductor/tasks/live_migrate.py</span><br>
+<span class="code-keyword">if</span> <span class="code-keyword">not</span> <span class="code-keyword">self</span>.destination:<br>
+&nbsp;&nbsp;<span class="code-keyword">self</span>.destination, dest_node, <span class="code-keyword">self</span>.limits = \<br>&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">self</span>.<span class="code-function">_find_destination</span>()<br>
+<span class="code-keyword">else</span>:<br>
+&nbsp;&nbsp;<span class="code-keyword">self</span>.<span class="code-function">_check_destination_is_not_source</span>()<br>
+&nbsp;&nbsp;<span class="code-keyword">self</span>.<span class="code-function">_check_host_is_up</span>(<span class="code-keyword">self</span>.destination)<br>
+&nbsp;&nbsp;<span class="code-keyword">self</span>.<span class="code-function">_check_destination_has_enough_memory</span>()<br>
+&nbsp;&nbsp;source_node, dest_node = (<br>&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">self</span>.<span class="code-function">_check_compatible_with_source_hypervisor</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">self</span>.destination))<br>
+&nbsp;&nbsp;scheduler_utils.<span class="code-function">claim_resources_on_destination</span>(...)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"No host chosen? Ask the scheduler. Host forced? Skip it, but still vet the host."</strong> Even on the forced path, Nova checks the host is up, has enough memory, and runs a compatible hypervisor, then manually claims the same resources on it. Either way, the instance ends up with a destination allocation.
+            </div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">Ledger open — 'accepted', and the source allocation parked</span></div>
+            <div class="ops-check-body">
+              <span class="prompt">$ </span><span class="cmd">openstack server migration list --server $UUID</span><br>
+              <span class="out">| 87 | qh2-rcc001 | qh2-rcc002 | <span class="hl">accepted</span> | live-migration |</span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT uuid, status, source_compute, dest_compute FROM nova.migrations WHERE instance_uuid='$UUID' ORDER BY id DESC LIMIT 1;</span><br>
+              <br>
+              <span class="note"># placement: the trick from this module, visible live</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider allocation show $MIGRATION_UUID</span>  <span class="out">→ source resources, parked on the migration</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider allocation show $UUID</span>  <span class="out">→ fresh claim on the destination</span><br>
+              <br>
+              <span class="note"># migration status 'error' this early → pre-checks or scheduling failed;</span><br>
+              <span class="note"># the exception is in nova-conductor's log, not on either compute host</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 3 — CROSS-HOST NEGOTIATION ════════════ -->
+  <section class="module" id="module-3" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">03</span>
+        <h1 class="module-title">The nested handshake</h1>
+        <p class="module-subtitle">This is the signature pattern of live migration. Conductor issues a synchronous RPC <em>call</em> to the destination, which issues another synchronous <em>call</em> back to the source. The result is the <code>migrate_data</code> object that carries everything forward.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Conductor calls the destination, which calls the source</h2>
+          <p>Note <code>cctxt.call</code> (not <code>cast</code>): conductor <em>blocks</em> waiting for <code>migrate_data</code>. The destination manager in turn blocks on a <code>call</code> to the source. Two synchronous round trips nested inside each other.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">conductor/tasks/live_migrate.py</span><br>
+<span class="code-keyword">try</span>:<br>
+&nbsp;&nbsp;<span class="code-keyword">self</span>.migrate_data = <span class="code-keyword">self</span>.compute_rpcapi.\<br>&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-function">check_can_live_migrate_destination</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">self</span>.context, <span class="code-keyword">self</span>.instance, destination,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">self</span>.block_migration, <span class="code-keyword">self</span>.disk_over_commit,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">self</span>.migration, <span class="code-keyword">self</span>.limits)<br>
+<span class="code-keyword">except</span> messaging.MessagingTimeout:<br>
+&nbsp;&nbsp;<span class="code-keyword">raise</span> exception.<span class="code-class">MigrationPreCheckError</span>(msg)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Conductor asks the destination 'can you take this guest?' and waits."</strong> This is a <code>call</code> — blocking. If the messaging layer times out, Nova treats it as a precheck failure and aborts before anything moves.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Destination compute calls source compute back</h2>
+          <p>Inside the destination manager, after the driver builds its check data, it makes a blocking RPC <code>call</code> to the source host, which builds and returns the source-side <code>migrate_data</code>. This is the inner half of the nested handshake.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/manager.py</span><br>
+<span class="code-keyword">try</span>:<br>
+&nbsp;&nbsp;migrate_data = (<br>&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">self</span>.compute_rpcapi.<span class="code-function">check_can_live_migrate_source</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;ctxt, instance, dest_check_data)<br>&nbsp;&nbsp;)<br>
+<span class="code-keyword">except</span> Exception <span class="code-keyword">as</span> ex:<br>
+&nbsp;&nbsp;...<br>
+&nbsp;&nbsp;<span class="code-keyword">raise</span> exception.<span class="code-class">MigrationPreCheckError</span>(msg)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"The destination asks the source 'given what I can do, are you OK to send the guest?'"</strong> and waits for the merged answer. The destination's capabilities plus the source's response together become the <code>migrate_data</code> that the rest of the flow relies on.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Both check RPCs are synchronous calls</h2>
+          <p>In <span class="file-ref">nova/compute/rpcapi.py</span>, both <code>check_can_live_migrate_destination</code> and <code>check_can_live_migrate_source</code> use <code>cctxt.call</code> (with <code>long_rpc_timeout</code> for the destination), unlike the actual <code>live_migration</code> which is a fire-and-forget <code>cast</code>.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/rpcapi.py</span><br>
+cctxt = client.<span class="code-function">prepare</span>(server=destination,<br>&nbsp;&nbsp;version=version,<br>&nbsp;&nbsp;call_monitor_timeout=CONF.rpc_response_timeout,<br>&nbsp;&nbsp;timeout=CONF.long_rpc_timeout)<br>
+<span class="code-keyword">return</span> cctxt.<span class="code-function">call</span>(ctxt,<br>&nbsp;&nbsp;<span class="code-string">'check_can_live_migrate_destination'</span>, **kwargs)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"The 'can we?' checks block and return an answer."</strong> The longer timeout reflects that the destination may itself be waiting on a nested call to the source. The "do it" command later will <em>not</em> block — it is a cast.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">bind_ports_to_host creates dest bindings before the move</h2>
+          <p>Still in the precheck path (<code>_call_livem_checks_on_host</code>), if Neutron supports the binding-extended API, conductor creates <em>inactive</em> <span class="term" data-definition="A port binding ties a Neutron port to a specific compute host. The multiple-port-binding extension lets a port have both a source (active) and destination (inactive) binding during a move.">port bindings</span> on the destination via <code>bind_ports_to_host</code> and folds the resulting vif details into <code>migrate_data.vifs</code>. The destination bindings exist but are inactive; the active binding is still the source.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">conductor/tasks/live_migrate.py</span><br>
+bindings = <span class="code-keyword">self</span>.network_api.<span class="code-function">bind_ports_to_host</span>(<br>&nbsp;&nbsp;context=<span class="code-keyword">self</span>.context, instance=<span class="code-keyword">self</span>.instance,<br>&nbsp;&nbsp;host=destination, vnic_types=<span class="code-keyword">None</span>,<br>&nbsp;&nbsp;port_profiles=ports_profile)<br>
+<span class="code-keyword">except</span> exception.PortBindingFailed <span class="code-keyword">as</span> e:<br>
+&nbsp;&nbsp;<span class="code-keyword">raise</span> exception.<span class="code-class">MigrationPreCheckError</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;reason=e.<span class="code-function">format_message</span>())<br>
+<span class="code-keyword">return</span> bindings
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Tell Neutron to prepare a dormant port binding on the destination."</strong> Provider mappings (for SR-IOV / resource-request ports) are merged into the binding profile. If Neutron can't bind, the migration aborts before anything moves. These dormant bindings are what later let the source flip traffic over with minimal downtime.
+            </div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">The handshake leaves tracks — an inactive binding on the destination</span></div>
+            <div class="ops-check-body">
+              <span class="note"># the port still answers with the SOURCE host — that binding is the active one</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack port show $PORT_ID -c binding_host_id -c status</span><br>
+              <span class="out">| qh2-rcc001 | ACTIVE |</span><br>
+              <br>
+              <span class="note"># but neutron's DB now holds TWO bindings for the port: source ACTIVE, dest INACTIVE</span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT host, status, vif_type FROM neutron.ml2_port_bindings WHERE port_id='$PORT_ID';</span><br>
+              <span class="out">| qh2-rcc001 | <span class="hl">ACTIVE</span>   | ovs |</span><br>
+              <span class="out">| qh2-rcc002 | <span class="hl">INACTIVE</span> | ovs |</span><br>
+              <br>
+              <span class="note"># migration died during the pre-checks? status goes 'error' and the exception names the</span><br>
+              <span class="note"># failing side: MigrationPreCheckError from dest or source appears in nova-conductor's log</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 4 — THE TRANSFER ════════════ -->
+  <section class="module" id="module-4" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">04</span>
+        <h1 class="module-title">The transfer</h1>
+        <p class="module-subtitle">Now the pivot: conductor stops orchestrating and <em>casts</em> the migration to the source. The source prepares the destination, then libvirt streams the live guest across while a monitor watches.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The actual migration command is a cast, not a call</h2>
+          <p>This is the pivot from synchronous orchestration to asynchronous execution. Once a destination is settled and validated, the task fills in <code>migration.dest_node</code>/<code>dest_compute</code>, saves it, and issues <code>compute_rpcapi.live_migration</code> — a <code>cast</code> to the <strong>source</strong> host. Conductor does <em>not</em> wait for the migration to finish.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">conductor/tasks/live_migrate.py</span><br>
+<span class="code-keyword">return</span> <span class="code-keyword">self</span>.compute_rpcapi.<span class="code-function">live_migration</span>(<span class="code-keyword">self</span>.context,<br>&nbsp;&nbsp;host=<span class="code-keyword">self</span>.source,<br>&nbsp;&nbsp;instance=<span class="code-keyword">self</span>.instance,<br>&nbsp;&nbsp;dest=<span class="code-keyword">self</span>.destination,<br>&nbsp;&nbsp;block_migration=<span class="code-keyword">self</span>.block_migration,<br>&nbsp;&nbsp;migration=<span class="code-keyword">self</span>.migration,<br>&nbsp;&nbsp;migrate_data=<span class="code-keyword">self</span>.migrate_data)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Tell the source compute 'begin live migrating this guest to the destination' and return."</strong> From here the conductor task is done; the source host runs the show. Because it's a cast, conductor gets no reply — the database state becomes the result.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Source compute submits the job to a thread pool</h2>
+          <p><code>live_migration</code> sets migration status <code>queued</code>, registers the instance in <code>_waiting_live_migrations</code> (so it can be aborted), and submits <code>_do_live_migration</code> to a green-thread executor. The RPC worker returns immediately; the heavy lifting happens in the background.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/manager.py</span><br>
+<span class="code-keyword">self</span>.<span class="code-function">_set_migration_status</span>(migration, <span class="code-string">'queued'</span>)<br>
+<span class="code-keyword">self</span>._waiting_live_migrations[instance.uuid] = (<span class="code-keyword">None</span>, <span class="code-keyword">None</span>)<br>
+<span class="code-keyword">try</span>:<br>
+&nbsp;&nbsp;future = nova.utils.<span class="code-function">pass_context</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">self</span>._live_migration_executor.submit,<br>&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">self</span>._do_live_migration, context, dest, instance,<br>&nbsp;&nbsp;&nbsp;&nbsp;block_migration, migration, migrate_data)<br>
+&nbsp;&nbsp;<span class="code-keyword">self</span>._waiting_live_migrations[instance.uuid] = (migration, future)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Queue the migration so we can track and cancel it, then hand the heavy work to a background worker."</strong> Registering it in <code>_waiting_live_migrations</code> is what makes <code>openstack server migration abort</code> possible while the job is still queued.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">New Cinder attachment created on the destination</h2>
+          <p><code>_do_live_migration</code> sets status <code>preparing</code> and calls the destination's <code>pre_live_migration</code> (a synchronous <code>call</code>, wrapped in <code>wait_for_instance_event</code> for <code>network-vif-plugged</code>). For each volume BDM using the cinder v3.44 <span class="term" data-definition="An attachment is Cinder's record that a particular consumer on a particular host may use a volume. Live migration creates a new attachment on the destination before deleting the old source one.">attachment</span> API, the destination creates a brand-new attachment and records the <em>old</em> attachment id in <code>migrate_data.old_vol_attachment_ids</code>.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/manager.py</span><br>
+attach_ref = <span class="code-keyword">self</span>.volume_api.<span class="code-function">attachment_create</span>(<br>&nbsp;&nbsp;context, bdm.volume_id, bdm.instance_uuid,<br>&nbsp;&nbsp;connector=connector, mountpoint=bdm.device_name)<br>
+...<br>
+migrate_data.old_vol_attachment_ids[bdm.volume_id] = \<br>&nbsp;&nbsp;bdm.attachment_id<br>
+bdm.attachment_id = attach_ref[<span class="code-string">'id'</span>]<br>
+bdm.<span class="code-function">save</span>()
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"On the destination, make a fresh volume attachment so the volume can be reached from there, remembering the old one."</strong> Cinder now knows both the source and destination want the volume. The remembered old id lets Nova delete it on success or restore it on rollback.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Driver plugs vifs; wait_for_vif_plugged is set</h2>
+          <p>The destination driver's <code>pre_live_migration</code> plugs the vifs and connects volumes. If multiple port bindings are in use and <code>live_migration_wait_for_vif_plug</code> is on, the source will wait for a <code>network-vif-plugged</code> event before starting the guest transfer.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/manager.py</span><br>
+migrate_data = <span class="code-keyword">self</span>.driver.<span class="code-function">pre_live_migration</span>(<br>&nbsp;&nbsp;context, instance, block_device_info,<br>&nbsp;&nbsp;network_info, disk, migrate_data)<br>
+...<br>
+migrate_data.wait_for_vif_plugged = (<br>&nbsp;&nbsp;CONF.compute.live_migration_wait_for_vif_plug <span class="code-keyword">and</span><br>&nbsp;&nbsp;using_multiple_port_bindings<br>
+)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"The destination connects the network and storage for the guest, and tells the source whether to wait for Neutron to confirm the network is plugged before streaming the guest over."</strong> Waiting reduces the risk of packets being dropped at the moment of cutover.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Source binds post/rollback callbacks then calls the driver</h2>
+          <p>Back on the source, <code>_do_live_migration</code> sets status <code>running</code> and calls <code>driver.live_migration</code> with two callbacks. The virt driver knows nothing about RPC or Placement; it just calls <code>post_method</code> on success or <code>recover_method</code> on failure. This decoupling is why conductor's rollback comments note it can't roll back the compute call.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/manager.py</span><br>
+post_live_migration = functools.<span class="code-function">partial</span>(<br>&nbsp;&nbsp;<span class="code-keyword">self</span>._post_live_migration_update_host,<br>&nbsp;&nbsp;source_bdms=source_bdms)<br>
+rollback_live_migration = functools.<span class="code-function">partial</span>(<br>&nbsp;&nbsp;<span class="code-keyword">self</span>._rollback_live_migration, source_bdms=source_bdms)<br>
+...<br>
+<span class="code-keyword">self</span>.driver.<span class="code-function">live_migration</span>(context, instance, dest,<br>&nbsp;&nbsp;post_live_migration, rollback_live_migration,<br>&nbsp;&nbsp;block_migration, migrate_data)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Prepare a 'what to do when it works' and a 'what to do when it breaks' callback, then hand control to libvirt."</strong> Whichever happens, the right cleanup runs. The driver is deliberately ignorant of the orchestration around it.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The actual libvirt domain transfer</h2>
+          <p><code>_live_migration_operation</code> calls <code>guest.migrate(...)</code> (libvirt's <code>migrateToURI3</code> under the hood) with the destination URI and the rewritten destination XML. This is the call that copies live RAM and CPU state across the wire.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">virt/libvirt/driver.py</span><br>
+guest.<span class="code-function">migrate</span>(<span class="code-keyword">self</span>.<span class="code-function">_live_migration_uri</span>(dest),<br>&nbsp;&nbsp;migrate_uri=migrate_uri,<br>&nbsp;&nbsp;flags=migration_flags,<br>&nbsp;&nbsp;migrate_disks=device_names,<br>&nbsp;&nbsp;destination_xml=new_xml_str,<br>&nbsp;&nbsp;bandwidth=CONF.libvirt.live_migration_bandwidth)<br>
+LOG.<span class="code-function">debug</span>(<span class="code-string">"Migrate API has completed"</span>, instance=instance)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Ask libvirt to copy the running guest — memory, CPU, optionally disks — to the destination host's libvirt, using the rewritten guest definition."</strong> The guest never stops; pages are copied while it runs, then a brief pause finalises the move.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Monitor dispatches to post_method or recover_method</h2>
+          <p><code>_live_migration_monitor</code> polls the libvirt job. On <span class="term" data-definition="The libvirt job state that means the live migration finished successfully — the guest is now running on the destination. After this point there is no rollback.">VIR_DOMAIN_JOB_COMPLETED</span> it calls <code>post_method</code>; on <code>JOB_FAILED</code> or <code>JOB_CANCELLED</code> it runs recover tasks then <code>recover_method</code>.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">virt/libvirt/driver.py</span><br>
+<span class="code-keyword">elif</span> info.type == libvirt.VIR_DOMAIN_JOB_COMPLETED:<br>
+&nbsp;&nbsp;LOG.<span class="code-function">info</span>(<span class="code-string">"Migration operation has completed"</span>, ...)<br>
+&nbsp;&nbsp;<span class="code-function">post_method</span>(context, instance, dest,<br>&nbsp;&nbsp;&nbsp;&nbsp;block_migration, migrate_data)<br>
+&nbsp;&nbsp;<span class="code-keyword">break</span><br>
+<span class="code-keyword">elif</span> info.type == libvirt.VIR_DOMAIN_JOB_FAILED:<br>
+&nbsp;&nbsp;...<br>
+&nbsp;&nbsp;<span class="code-function">recover_method</span>(context, instance, dest, migrate_data)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Keep watching the transfer. Once libvirt says 'done', run the success cleanup. If it failed or was cancelled, run the rollback cleanup instead."</strong> <code>JOB_COMPLETED</code> is the point of no return: the guest is now on the destination.
+            </div>
+          </div>
+          <div class="callout callout-warning">
+            <div class="callout-icon">🚦</div>
+            <div class="callout-content">
+              <span class="callout-title">JOB_COMPLETED is the point of no return</span>
+              <p>Up to this moment, any failure rolls back cleanly — the guest is still running on the source. After <code>JOB_COMPLETED</code>, the guest is on the destination and there is no going back; later failures force the instance to <code>ERROR</code> rather than rolling back.</p>
+            </div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">The transfer in flight — queued → preparing → running, with live progress</span></div>
+            <div class="ops-check-body">
+              <span class="prompt">$ </span><span class="cmd">openstack server migration list --server $UUID</span>  <span class="out">→ status <span class="hl">running</span></span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack server migration show $UUID $MIGRATION_ID</span><br>
+              <span class="out">memory_processed_bytes / memory_remaining_bytes / disk_* — refreshed as the monitor polls</span><br>
+              <br>
+              <span class="note"># the same numbers straight from libvirt, on the SOURCE host</span><br>
+              <span class="prompt">source$ </span><span class="cmd">virsh domjobinfo instance-000xxxxx</span><br>
+              <br>
+              <span class="note"># where is it stuck? queued = too many concurrent migrations on the source</span><br>
+              <span class="note"># (max_concurrent_live_migrations); preparing = pre_live_migration on the DEST</span><br>
+              <span class="note"># (vif plug, cinder attachment_create); running forever = memory dirtying faster than copy</span><br>
+              <br>
+              <span class="note"># operator levers while it runs</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack server migration force complete $UUID $MIGRATION_ID</span>   <span class="note"># pause/post-copy to converge</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack server migration abort $UUID $MIGRATION_ID</span>   <span class="note"># cancel; guest keeps running on the source</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 5 — THE CUTOVER ════════════ -->
+  <section class="module" id="module-5" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">05</span>
+        <h1 class="module-title">The cutover and cleanup</h1>
+        <p class="module-subtitle">The guest is now running on the destination. The source runs <code>_post_live_migration</code> to switch the network over, drop its volume attachment, then calls the destination to define the domain and claim the instance as its own.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">migrate_instance_start activates destination port bindings</h2>
+          <p>On success, <code>_post_live_migration</code> runs on the source. It activates the destination port bindings <em>first</em>, in a <code>try</code>, to minimise downtime — this atomically flips the destination binding to ACTIVE and the source to inactive. The network cutover.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/manager.py</span><br>
+migration = objects.<span class="code-class">Migration</span>(<br>&nbsp;&nbsp;source_compute=<span class="code-keyword">self</span>.host, dest_compute=dest,<br>
+)<br>
+<span class="code-comment"># For neutron, migrate_instance_start will</span><br>
+<span class="code-comment"># activate the destination host port bindings,</span><br>
+<span class="code-comment"># if there are any created by conductor before</span><br>
+<span class="code-comment"># live migration started.</span><br>
+<span class="code-keyword">self</span>.network_api.<span class="code-function">migrate_instance_start</span>(<br>&nbsp;&nbsp;ctxt, instance, migration)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Switch the network over."</strong> The dormant bindings conductor pre-created on the destination become active; the source ones go inactive. Traffic now flows to the new host. Volume cleanup happens afterwards in a <code>finally</code>, so it runs even if this step failed.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">activate_port_binding is a POST-like action in Neutron</h2>
+          <p>Internally <code>migrate_instance_start</code> calls <code>client.activate_port_binding(vif['id'], dest_host)</code> per vif — a dedicated action rather than a normal status PUT.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">network/neutron.py</span><br>
+<span class="code-keyword">try</span>:<br>
+&nbsp;&nbsp;<span class="code-comment"># This is a bit weird in that we don't PUT and</span><br>
+&nbsp;&nbsp;<span class="code-comment"># update the status to ACTIVE, it's more like a</span><br>
+&nbsp;&nbsp;<span class="code-comment"># POST action method in the compute API.</span><br>
+&nbsp;&nbsp;client.<span class="code-function">activate_port_binding</span>(vif[<span class="code-string">'id'</span>], dest_host)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"For each port, tell Neutron 'activate the destination binding.'"</strong> Neutron handles making the source binding inactive as part of the same action. This is a REST call to Neutron from the source compute.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Source volume attachments deleted; source cleaned up</h2>
+          <p><code>_post_live_migration_remove_source_vol_connections</code> deletes the old source-host Cinder attachment (v3.44) or terminates the legacy connection, all inside the <code>finally</code> so it runs even if vif activation failed. Source vifs are unplugged and the source domain destroyed.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/manager.py</span><br>
+<span class="code-keyword">else</span>:<br>
+&nbsp;&nbsp;<span class="code-comment"># cinder v3.44 api flow - delete the old</span><br>
+&nbsp;&nbsp;<span class="code-comment"># attachment for the source host</span><br>
+&nbsp;&nbsp;<span class="code-keyword">self</span>.volume_api.<span class="code-function">attachment_delete</span>(context,<br>&nbsp;&nbsp;&nbsp;&nbsp;bdm.attachment_id)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Tell Cinder to drop the volume attachment that pointed at the old host."</strong> Only the destination attachment remains. The volume is now reachable solely from the host that runs the guest.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">migrate_instance_finish + instance host updated to destination</h2>
+          <p>The source <em>calls</em> (synchronous RPC) <code>post_live_migration_at_destination</code>. The destination calls <code>migrate_instance_finish</code> (updates each port's <code>binding:host_id</code> to the destination), allocates claimed PCI, defines the persistent domain via the driver, then sets <code>instance.host</code>/<code>node</code>/<code>compute_id</code> to itself and <code>task_state=None</code>. This is where the instance officially belongs to the destination in the database.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/manager.py</span><br>
+instance.<span class="code-function">apply_migration_context</span>()<br>
+instance.<span class="code-function">drop_migration_context</span>()<br>
+instance.host = <span class="code-keyword">self</span>.host<br>
+instance.power_state = current_power_state<br>
+instance.task_state = <span class="code-keyword">None</span><br>
+instance.node = node_name<br>
+instance.compute_id = compute_node <span class="code-keyword">and</span> compute_node.id <span class="code-keyword">or</span> <span class="code-keyword">None</span><br>
+instance.progress = <span class="code-number">0</span><br>
+instance.<span class="code-function">save</span>(expected_task_state=task_states.MIGRATING)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Persist that the guest now lives on this destination host, apply any new NUMA/resource context, and clear the migrating flag."</strong> The <code>expected_task_state=MIGRATING</code> guard protects against races with other operations on the instance.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Migration marked completed and source allocation deleted</h2>
+          <p>Right at the end, after <code>post_live_migration_at_destination</code> succeeds, the migration is set <code>completed</code> and <code>_delete_allocation_after_move</code> deletes the source allocation that the migration record was holding in Placement. The instance keeps only its destination allocation.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/manager.py</span><br>
+<span class="code-keyword">if</span> migrate_data <span class="code-keyword">and</span> migrate_data.<span class="code-function">obj_attr_is_set</span>(<span class="code-string">'migration'</span>):<br>
+&nbsp;&nbsp;migrate_data.migration.status = <span class="code-string">'completed'</span><br>
+&nbsp;&nbsp;migrate_data.migration.<span class="code-function">save</span>()<br>
+&nbsp;&nbsp;<span class="code-keyword">self</span>.<span class="code-function">_delete_allocation_after_move</span>(ctxt,<br>&nbsp;&nbsp;&nbsp;&nbsp;instance, migrate_data.migration)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Mark the move done and free the old reservation in Placement that was parked on the migration record."</strong> The instance's resources now live only on the destination. The ledger is closed: <code>migration.status = completed</code>.
+            </div>
+          </div>
+          <div class="state-track">
+            <span class="state-pill vm">vm: ACTIVE</span>
+            <span class="state-arrow">·</span>
+            <span class="state-pill task">task: MIGRATING</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill done">task: None</span>
+            <span class="state-arrow">·</span>
+            <span class="state-pill done">migration: completed</span>
+          </div>
+          <div class="callout callout-success">
+            <div class="callout-icon">🎉</div>
+            <div class="callout-content">
+              <span class="callout-title">Same VM, new home, no reboot</span>
+              <p>The guest never stopped running. <code>vm_state</code> stayed <code>ACTIVE</code> the entire time; only <code>task_state</code> moved through <code>MIGRATING</code> and back to <code>None</code>. <code>openstack server show</code> now reports the destination host.</p>
+            </div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">After the cutover — one host, one allocation, closed ledger</span></div>
+            <div class="ops-check-body">
+              <span class="prompt">$ </span><span class="cmd">openstack server show $UUID -c status -c OS-EXT-STS:task_state -c OS-EXT-SRV-ATTR:host</span><br>
+              <span class="out">| <span class="hl">ACTIVE</span> | None | qh2-rcc002 |</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack server migration list --server $UUID</span>  <span class="out">→ status <span class="hl">completed</span></span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT status FROM nova.migrations WHERE uuid='$MIGRATION_UUID';</span>  <span class="out">→ completed</span><br>
+              <br>
+              <span class="note"># the parked source allocation must be GONE, network and storage must point at the dest</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider allocation show $MIGRATION_UUID</span>  <span class="out">→ (empty ✓)</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack port show $PORT_ID -c binding_host_id</span>  <span class="out">→ qh2-rcc002</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack --os-volume-api-version 3.27 volume attachment list --all-projects | grep $UUID</span>  <span class="out">→ one row, dest host</span><br>
+              <br>
+              <span class="note"># instance ACTIVE on the dest but migration never 'completed' + allocation leak →</span><br>
+              <span class="note"># the post steps died half-way; reconcile with: nova-manage placement audit --verbose</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 6 — FULL JOURNEY ════════════ -->
+  <section class="module" id="module-6" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">06</span>
+        <h1 class="module-title">The full journey, animated</h1>
+        <p class="module-subtitle">Press <strong>Next step</strong> to watch a single message packet travel the entire move. Watch for the rhythm: blocking <em>calls</em> for the handshake, a <em>cast</em> for the transfer, and REST whenever Nova talks to another project.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <div class="flow-animation" id="livemig-flow" data-steps='[
+            {"highlight":"api","label":"1. REST: you send the os-migrateLive request. nova-api validates the host, loads the RequestSpec, sets task_state=MIGRATING (VM stays ACTIVE)."},
+            {"from":"api","to":"conductor","packet":true,"highlight":"conductor","label":"2. CAST: nova-api casts live_migrate_instance to nova-conductor with the RequestSpec, host and force flag — fire and forget."},
+            {"highlight":"conductor","label":"3. LIBRARY: conductor creates the Migration record (status accepted) and builds the LiveMigrationTask."},
+            {"from":"conductor","to":"placement","packet":true,"highlight":"placement","label":"4. REST: conductor calls move_allocations(instance.uuid → migration.uuid). The source allocation is now held by the migration record."},
+            {"from":"conductor","to":"scheduler","packet":true,"highlight":"scheduler","label":"5. CALL: conductor asks the scheduler for a destination via select_destinations, claiming a dest allocation (skipped if a host was forced)."},
+            {"from":"conductor","to":"compute_dst","packet":true,"highlight":"compute_dst","label":"6. CALL: conductor blocks on check_can_live_migrate_destination — the outer half of the handshake."},
+            {"from":"compute_dst","to":"compute_src","packet":true,"highlight":"compute_src","label":"7. CALL: the destination calls check_can_live_migrate_source back — the nested inner call. Returns the merged migrate_data."},
+            {"from":"conductor","to":"neutron","packet":true,"highlight":"neutron","label":"8. REST: conductor bind_ports_to_host creates INACTIVE destination port bindings, folded into migrate_data.vifs."},
+            {"from":"conductor","to":"compute_src","packet":true,"highlight":"compute_src","label":"9. CAST: conductor casts live_migration to the source — fire and forget. The conductor task is now done."},
+            {"highlight":"compute_src","label":"10. LIBRARY: the source submits _do_live_migration to a thread pool. Migration status → preparing."},
+            {"from":"compute_src","to":"compute_dst","packet":true,"highlight":"compute_dst","label":"11. CALL: the source calls pre_live_migration on the destination, wrapped in wait_for_vif_plugged."},
+            {"from":"compute_dst","to":"cinder","packet":true,"highlight":"cinder","label":"12. REST: the destination creates a new Cinder attachment; the old attachment id is stashed and the BDM updated."},
+            {"from":"compute_dst","to":"neutron","packet":true,"highlight":"neutron","label":"13. LIBRARY: the destination driver plugs vifs; a network-vif-plugged event may fire."},
+            {"from":"compute_src","to":"libvirt","packet":true,"highlight":"libvirt","label":"14. LIBRARY: driver.live_migration spawns _live_migration_operation; guest.migrate streams the live domain. Status → running."},
+            {"highlight":"libvirt","label":"15. LIBRARY: _live_migration_monitor polls the libvirt job until VIR_DOMAIN_JOB_COMPLETED — the point of no return."},
+            {"from":"libvirt","to":"compute_src","packet":true,"highlight":"compute_src","label":"16. LIBRARY: the monitor calls post_method (_post_live_migration_update_host) on the source."},
+            {"from":"compute_src","to":"neutron","packet":true,"highlight":"neutron","label":"17. REST: migrate_instance_start → activate_port_binding flips the destination bindings ACTIVE. The network cutover."},
+            {"from":"compute_src","to":"cinder","packet":true,"highlight":"cinder","label":"18. REST: attachment_delete removes the old source-host volume attachment."},
+            {"from":"compute_src","to":"libvirt","packet":true,"highlight":"libvirt","label":"19. LIBRARY: source vifs are unplugged and the source domain destroyed."},
+            {"from":"compute_src","to":"compute_dst","packet":true,"highlight":"compute_dst","label":"20. CALL: the source calls post_live_migration_at_destination (synchronous)."},
+            {"from":"compute_dst","to":"neutron","packet":true,"highlight":"neutron","label":"21. REST: migrate_instance_finish updates binding:host_id to the destination and tears down the inactive source bindings."},
+            {"from":"compute_dst","to":"libvirt","packet":true,"highlight":"libvirt","label":"22. LIBRARY: the driver defines the persistent domain. instance.host is set to dest, task_state cleared."},
+            {"from":"compute_src","to":"placement","packet":true,"highlight":"placement","label":"23. REST: _delete_allocation_after_move deletes the source allocation held by the migration. migration.status = completed. 🎉"}
+          ]'>
+            <div class="flow-actors">
+              <div class="flow-actor active" id="flow-api"><div class="flow-actor-icon">API</div><span>nova-api</span></div>
+              <div class="flow-actor" id="flow-conductor"><div class="flow-actor-icon">CO</div><span>conductor</span></div>
+              <div class="flow-actor" id="flow-scheduler"><div class="flow-actor-icon">SC</div><span>scheduler</span></div>
+              <div class="flow-actor" id="flow-compute_src"><div class="flow-actor-icon">SRC</div><span>compute src</span></div>
+              <div class="flow-actor" id="flow-compute_dst"><div class="flow-actor-icon">DST</div><span>compute dst</span></div>
+              <div class="flow-actor" id="flow-placement"><div class="flow-actor-icon">PL</div><span>placement</span></div>
+              <div class="flow-actor" id="flow-neutron"><div class="flow-actor-icon">NE</div><span>neutron</span></div>
+              <div class="flow-actor" id="flow-cinder"><div class="flow-actor-icon">CI</div><span>cinder</span></div>
+              <div class="flow-actor" id="flow-libvirt"><div class="flow-actor-icon">VM</div><span>libvirt</span></div>
+            </div>
+            <div class="flow-packet"></div>
+            <div class="flow-step-label">Click "Next step" to begin the journey</div>
+            <div class="flow-controls">
+              <button class="btn btn-primary flow-next-btn">Next step →</button>
+              <button class="btn flow-reset-btn">Reset</button>
+              <span class="flow-progress">Step 0 / 23</span>
+            </div>
+          </div>
+          <div class="callout callout-accent">
+            <div class="callout-icon">🔎</div>
+            <div class="callout-content">
+              <span class="callout-title">Calls cluster at the start, the cast frees conductor</span>
+              <p>Steps 5, 6, 7, 11 and 20 are blocking <em>calls</em>; step 9 is the one <em>cast</em> that hands control to the source so conductor never blocks on the long transfer. The nested call at step 7 — destination calling the source back — is the signature you should remember.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 7 — FAILURES ════════════ -->
+  <section class="module" id="module-7" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">07</span>
+        <h1 class="module-title">When it goes wrong</h1>
+        <p class="module-subtitle">Live migration is reversible — right up until the guest lands on the destination. The recovery path you get depends entirely on <em>when</em> the failure happens relative to <code>JOB_COMPLETED</code>.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Before the transfer: precheck failure</h2>
+          <p>If a precheck fails in conductor — <code>NoValidHost</code>, <code>MigrationPreCheckError</code>, hypervisor too old, not enough memory, port binding failed — <code>LiveMigrationTask.rollback</code> calls <code>revert_allocation_for_migration</code> (moving the allocation back from <code>migration.uuid</code> to <code>instance.uuid</code>) and resets the instance to its prior <code>vm_state</code>; <code>migration.status</code> is set to <code>error</code>. The libvirt transfer never starts.</p>
+          <div class="step-cards stagger-children">
+            <div class="step-card animate-in"><div class="step-num">A</div><div class="step-body"><strong>Allocation reverted</strong><p>The source claim parked on the migration record moves back to the instance. Placement is as it was.</p><span class="src">revert_allocation_for_migration · tasks/migrate.py</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">B</div><div class="step-body"><strong>Instance restored</strong><p><code>_set_vm_state</code> puts the instance back to its prior <code>vm_state</code>; the guest never moved.</p></div></div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">During prepare: pre_live_migration fails on the destination</h2>
+          <p>If <code>pre_live_migration</code> fails, <code>_cleanup_pre_live_migration</code> sets <code>migration.status = error</code> and calls <code>_rollback_live_migration(..., pre_live_migration=True)</code>. The new destination Cinder attachments are deleted and BDMs restored to the source; destination port bindings are torn down; the destination allocation is reverted. The source guest was never touched.</p>
+          <div class="callout callout-info">
+            <div class="callout-icon">↩️</div>
+            <div class="callout-content">
+              <span class="callout-title">Clean reversal</span>
+              <p>Because every destination-side change (attachment, binding, allocation) was recorded, each can be precisely undone. The remembered <code>old_vol_attachment_ids</code> let the BDMs point back at the source.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">During transfer: libvirt fails or is cancelled</h2>
+          <p>The monitor calls <code>recover_method</code> = <code>_rollback_live_migration</code>. It reverts the destination allocation, deletes destination volume connections/attachments, tears down destination networking, optionally drops the NUMA move-claim on the destination, and resets <code>task_state</code> to <code>None</code>. Crucially, <code>vm_state</code> stays <code>ACTIVE</code> — the guest is still running on the source.</p>
+          <div class="state-track">
+            <span class="state-pill vm">vm: ACTIVE (on source)</span>
+            <span class="state-arrow">·</span>
+            <span class="state-pill task">task: MIGRATING</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill done">task: None</span>
+            <span class="state-arrow">·</span>
+            <span class="state-pill task">migration: failed / cancelled</span>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">After JOB_COMPLETED: there is no rollback</h2>
+          <p>Once libvirt reports <code>VIR_DOMAIN_JOB_COMPLETED</code>, the guest is running on the destination and cannot be moved back. If <code>post_live_migration_at_destination</code> then fails (for example the driver can't define the domain), the instance is forced to <code>ERROR</code> via <code>_set_instance_obj_error_state</code> — but <code>_post_live_migration_update_host</code> still sets <code>instance.host=dest</code>, because that is now the truth.</p>
+          <div class="callout callout-warning">
+            <div class="callout-icon">🛑</div>
+            <div class="callout-content">
+              <span class="callout-title">The one-way door</span>
+              <p>After the guest's memory and CPU state live on the destination, "rolling back" would mean discarding the running machine. Nova won't do that. Post-point-of-no-return failures land the instance in <code>ERROR</code> on the destination, where an operator can investigate — never silently lost.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 8 — QUIZ ════════════ -->
+  <section class="module" id="module-8" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">08</span>
+        <h1 class="module-title">Check yourself</h1>
+        <p class="module-subtitle">Three questions and a matching exercise. If these click, you understand the live migration flow.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Quiz</h2>
+          <div class="quiz-container" id="quiz1">
+            <div class="quiz-question-block" data-correct="b"
+                 data-explanation-right="check_can_live_migrate_destination/_source use cctxt.call and block for the returned migrate_data, while live_migration uses cctxt.cast and returns immediately — the source thread pool then drives the long-running transfer."
+                 data-explanation-wrong="The checks must return data (migrate_data) to the caller, so they cannot be casts; the actual migration is long-running and must not block conductor, so it cannot be a call.">
+              <div class="quiz-question">How does conductor send the actual <code>live_migration</code> command to the source compute, and how does that differ from the can-migrate checks?</div>
+              <div class="quiz-options">
+                <button class="quiz-option" data-value="a" onclick="selectOption(this)"><span class="quiz-option-radio"></span>Both are RPC casts (fire and forget)</button>
+                <button class="quiz-option" data-value="b" onclick="selectOption(this)"><span class="quiz-option-radio"></span>The can-migrate checks are synchronous calls but live_migration is an asynchronous cast</button>
+                <button class="quiz-option" data-value="c" onclick="selectOption(this)"><span class="quiz-option-radio"></span>Both are synchronous calls</button>
+              </div>
+              <div class="quiz-feedback"></div>
+            </div>
+
+            <div class="quiz-question-block" data-correct="b"
+                 data-explanation-right="replace_allocation_with_migration calls move_allocations(instance.uuid, migration.uuid), so the source allocation is keyed to the migration UUID, freeing the instance to receive a fresh destination allocation."
+                 data-explanation-wrong="If the instance kept the source allocation, the new destination claim against the same instance consumer would conflict; the scheduler only creates the destination allocation, it does not hold the source.">
+              <div class="quiz-question">During a live migration, who holds the <em>source</em> host Placement allocation while the transfer is in progress?</div>
+              <div class="quiz-options">
+                <button class="quiz-option" data-value="a" onclick="selectOption(this)"><span class="quiz-option-radio"></span>The instance keeps holding it the whole time</button>
+                <button class="quiz-option" data-value="b" onclick="selectOption(this)"><span class="quiz-option-radio"></span>The migration record holds it (moved there by replace_allocation_with_migration)</button>
+                <button class="quiz-option" data-value="c" onclick="selectOption(this)"><span class="quiz-option-radio"></span>The scheduler holds it</button>
+              </div>
+              <div class="quiz-feedback"></div>
+            </div>
+
+            <div class="quiz-question-block" data-correct="c"
+                 data-explanation-right="Conductor creates the bindings as inactive in bind_ports_to_host; they are flipped to ACTIVE by migrate_instance_start → activate_port_binding during _post_live_migration, minimising network downtime."
+                 data-explanation-wrong="Creating a binding is not the same as activating it; pre_live_migration plugs vifs on the destination but the active binding stays on the source until post time.">
+              <div class="quiz-question">When are the destination Neutron port bindings <em>activated</em>?</div>
+              <div class="quiz-options">
+                <button class="quiz-option" data-value="a" onclick="selectOption(this)"><span class="quiz-option-radio"></span>When conductor first binds them in the precheck phase</button>
+                <button class="quiz-option" data-value="b" onclick="selectOption(this)"><span class="quiz-option-radio"></span>In pre_live_migration on the destination</button>
+                <button class="quiz-option" data-value="c" onclick="selectOption(this)"><span class="quiz-option-radio"></span>In _post_live_migration on the source, via migrate_instance_start, after the guest is running on the destination</button>
+              </div>
+              <div class="quiz-feedback"></div>
+            </div>
+
+            <button class="quiz-check-btn" onclick="checkQuiz('quiz1')">Check answers</button>
+            <button class="quiz-reset-btn" onclick="resetQuiz('quiz1')">Reset</button>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Match the function to its job</h2>
+          <p>Drag each function onto the task it performs during a live migration.</p>
+          <div class="dnd-container" id="match1">
+            <div class="dnd-chips">
+              <div class="dnd-chip" draggable="true" data-answer="replace">replace_allocation_with_migration</div>
+              <div class="dnd-chip" draggable="true" data-answer="checksrc">check_can_live_migrate_source</div>
+              <div class="dnd-chip" draggable="true" data-answer="bindports">bind_ports_to_host</div>
+              <div class="dnd-chip" draggable="true" data-answer="activate">migrate_instance_start → activate_port_binding</div>
+              <div class="dnd-chip" draggable="true" data-answer="delalloc">_delete_allocation_after_move</div>
+            </div>
+            <div class="dnd-zones">
+              <div class="dnd-zone" data-correct="replace"><div class="dnd-zone-label">Moves the source Placement allocation from the instance onto the migration record</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="checksrc"><div class="dnd-zone-label">Synchronous RPC call made by the destination back to the source to build migrate_data</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="bindports"><div class="dnd-zone-label">Creates inactive destination port bindings during the precheck phase</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="activate"><div class="dnd-zone-label">Flips destination port bindings to ACTIVE during source post-migration (network cutover)</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="delalloc"><div class="dnd-zone-label">Deletes the source allocation held by the migration record after success</div><div class="dnd-zone-target">Drop here</div></div>
+            </div>
+            <div style="margin-top: var(--space-6);">
+              <button class="btn btn-primary" onclick="checkDnD('match1')">Check matches</button>
+              <button class="btn" onclick="resetDnD('match1')">Reset</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <div class="callout callout-success">
+            <div class="callout-icon">🚀</div>
+            <div class="callout-content">
+              <span class="callout-title">You've traced a full live migration</span>
+              <p>From <code>os-migrateLive</code> to <code>migration.status = completed</code>: a Migration ledger, a moved Placement allocation, the nested call-back handshake, a cast that frees conductor, a libvirt stream of live memory, and a careful cutover of network and storage — all with the guest never leaving <code>ACTIVE</code>.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <div class="footer">
+    Traced from the OpenStack Nova source on branch <code>nectar/2024.1</code>. Code snippets are exact excerpts. Built in the codebase-to-course visual style.
+  </div>
+
+  </main>
+
+  <script>
+  (function () {
+    'use strict';
+    function $(sel, ctx) { return (ctx || document).querySelector(sel); }
+    function $$(sel, ctx) { return Array.from((ctx || document).querySelectorAll(sel)); }
+
+    /* ── NAV & PROGRESS ── */
+    const progressBar = $('#progress-bar');
+    const navDots = $$('.nav-dot');
+    const modules = $$('.module');
+
+    function updateProgress() {
+      if (!progressBar) return;
+      const scrollTop = window.scrollY;
+      const scrollHeight = document.documentElement.scrollHeight - window.innerHeight;
+      const pct = scrollHeight > 0 ? (scrollTop / scrollHeight) * 100 : 0;
+      progressBar.style.width = pct + '%';
+      progressBar.setAttribute('aria-valuenow', Math.round(pct));
+      updateNavDots();
+    }
+    function updateNavDots() {
+      const scrollMid = window.scrollY + window.innerHeight / 2;
+      modules.forEach((mod, i) => {
+        const dot = navDots[i];
+        if (!dot) return;
+        const top = mod.offsetTop;
+        const bottom = top + mod.offsetHeight;
+        if (scrollMid >= top && scrollMid < bottom) { dot.classList.add('active'); dot.classList.remove('visited'); }
+        else if (window.scrollY + window.innerHeight > top) { dot.classList.remove('active'); dot.classList.add('visited'); }
+        else { dot.classList.remove('active', 'visited'); }
+      });
+    }
+    window.addEventListener('scroll', () => requestAnimationFrame(updateProgress), { passive: true });
+    updateProgress();
+    navDots.forEach(dot => dot.addEventListener('click', () => {
+      const target = $('#' + dot.dataset.target);
+      if (target) target.scrollIntoView({ behavior: 'smooth' });
+    }));
+
+    /* ── KEYBOARD NAV ── */
+    function currentModuleIndex() {
+      const scrollMid = window.scrollY + window.innerHeight / 2;
+      for (let i = 0; i < modules.length; i++) {
+        const top = modules[i].offsetTop, bottom = top + modules[i].offsetHeight;
+        if (scrollMid >= top && scrollMid < bottom) return i;
+      }
+      return 0;
+    }
+    document.addEventListener('keydown', e => {
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { const n = modules[currentModuleIndex() + 1]; if (n) { n.scrollIntoView({ behavior: 'smooth' }); e.preventDefault(); } }
+      if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { const p = modules[currentModuleIndex() - 1]; if (p) { p.scrollIntoView({ behavior: 'smooth' }); e.preventDefault(); } }
+    });
+
+    /* ── REVEAL ── */
+    const revealObserver = new IntersectionObserver(entries => {
+      entries.forEach(entry => { if (entry.isIntersecting) { entry.target.classList.add('visible'); revealObserver.unobserve(entry.target); } });
+    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.08 });
+    $$('.animate-in').forEach(el => revealObserver.observe(el));
+    $$('.stagger-children').forEach(parent => Array.from(parent.children).forEach((child, i) => child.style.setProperty('--stagger-index', i)));
+
+    /* ── GLOSSARY ── */
+    let activeTooltip = null;
+    function positionTooltip(term, tip) {
+      const rect = term.getBoundingClientRect();
+      const tipWidth = Math.min(320, Math.max(200, window.innerWidth * 0.8));
+      let left = rect.left + rect.width / 2 - tipWidth / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - tipWidth - 8));
+      tip.style.left = left + 'px'; tip.style.width = tipWidth + 'px';
+      document.body.appendChild(tip);
+      const tipHeight = tip.offsetHeight;
+      if (rect.top - tipHeight - 12 < 0) { tip.style.top = (rect.bottom + 8) + 'px'; tip.classList.add('flip'); }
+      else { tip.style.top = (rect.top - tipHeight - 8) + 'px'; tip.classList.remove('flip'); }
+    }
+    function showTooltip(term, tip) {
+      if (activeTooltip && activeTooltip !== tip) { activeTooltip.classList.remove('visible'); activeTooltip.remove(); }
+      positionTooltip(term, tip);
+      requestAnimationFrame(() => tip.classList.add('visible'));
+      activeTooltip = tip;
+    }
+    function hideTooltip(tip) {
+      tip.classList.remove('visible');
+      setTimeout(() => { if (!tip.classList.contains('visible')) tip.remove(); }, 150);
+      if (activeTooltip === tip) activeTooltip = null;
+    }
+    $$('.term').forEach(term => {
+      const tip = document.createElement('span');
+      tip.className = 'term-tooltip';
+      tip.textContent = term.dataset.definition;
+      term.addEventListener('mouseenter', () => showTooltip(term, tip));
+      term.addEventListener('mouseleave', () => hideTooltip(tip));
+      term.addEventListener('click', e => { e.stopPropagation(); tip.classList.contains('visible') ? hideTooltip(tip) : showTooltip(term, tip); });
+    });
+    document.addEventListener('click', () => { if (activeTooltip) { activeTooltip.classList.remove('visible'); activeTooltip.remove(); activeTooltip = null; } });
+
+    /* ── QUIZ ── */
+    window.selectOption = function (btn) {
+      const block = btn.closest('.quiz-question-block');
+      $$('.quiz-option', block).forEach(o => o.classList.remove('selected'));
+      btn.classList.add('selected');
+    };
+    window.checkQuiz = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.quiz-question-block', container).forEach(q => {
+        const selected = $('.quiz-option.selected', q);
+        const feedback = $('.quiz-feedback', q);
+        const correct = q.dataset.correct;
+        const rightExp = q.dataset.explanationRight || '';
+        const wrongExp = q.dataset.explanationWrong || '';
+        if (!selected) { feedback.textContent = 'Pick an answer first!'; feedback.className = 'quiz-feedback show warning'; return; }
+        $$('.quiz-option', q).forEach(o => o.disabled = true);
+        if (selected.dataset.value === correct) {
+          selected.classList.add('correct');
+          feedback.innerHTML = '<strong>Exactly!</strong> ' + rightExp;
+          feedback.className = 'quiz-feedback show success';
+        } else {
+          selected.classList.add('incorrect');
+          const correctBtn = $('.quiz-option[data-value="' + correct + '"]', q);
+          if (correctBtn) correctBtn.classList.add('correct');
+          feedback.innerHTML = '<strong>Not quite.</strong> ' + wrongExp;
+          feedback.className = 'quiz-feedback show error';
+        }
+      });
+    };
+    window.resetQuiz = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.quiz-option', container).forEach(o => { o.classList.remove('selected', 'correct', 'incorrect'); o.disabled = false; });
+      $$('.quiz-feedback', container).forEach(f => { f.className = 'quiz-feedback'; f.textContent = ''; });
+    };
+
+    /* ── DND ── */
+    function initDnD(containerEl) {
+      if (!containerEl) return;
+      const chips = $$('.dnd-chip', containerEl);
+      const zones = $$('.dnd-zone', containerEl);
+      chips.forEach(chip => {
+        chip.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', chip.dataset.answer); chip.classList.add('dragging'); });
+        chip.addEventListener('dragend', () => chip.classList.remove('dragging'));
+      });
+      zones.forEach(zone => {
+        const target = $('.dnd-zone-target', zone);
+        if (!target) return;
+        target.addEventListener('dragover', e => { e.preventDefault(); target.classList.add('drag-over'); });
+        target.addEventListener('dragleave', () => target.classList.remove('drag-over'));
+        target.addEventListener('drop', e => {
+          e.preventDefault(); target.classList.remove('drag-over');
+          const answer = e.dataTransfer.getData('text/plain');
+          const chip = $('.dnd-chip[data-answer="' + answer + '"]', containerEl);
+          if (!chip) return;
+          target.textContent = chip.textContent; target.dataset.placed = answer; chip.classList.add('placed');
+        });
+      });
+      chips.forEach(chip => {
+        chip.addEventListener('touchstart', e => {
+          e.preventDefault();
+          const touch = e.touches[0];
+          const ghost = chip.cloneNode(true);
+          ghost.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;left:' + (touch.clientX - 40) + 'px;top:' + (touch.clientY - 20) + 'px;background:var(--color-accent);color:white;padding:0.5rem 1rem;border-radius:9999px;font-size:0.875rem;font-weight:600;opacity:0.85;';
+          document.body.appendChild(ghost); chip._ghost = ghost; chip._answer = chip.dataset.answer;
+        }, { passive: false });
+        chip.addEventListener('touchmove', e => {
+          e.preventDefault(); const touch = e.touches[0];
+          if (chip._ghost) { chip._ghost.style.left = (touch.clientX - 40) + 'px'; chip._ghost.style.top = (touch.clientY - 20) + 'px'; }
+          zones.forEach(z => { const t = $('.dnd-zone-target', z); if (t) t.classList.remove('drag-over'); });
+          const el = document.elementFromPoint(touch.clientX, touch.clientY);
+          const zt = el && el.closest('.dnd-zone-target'); if (zt) zt.classList.add('drag-over');
+        }, { passive: false });
+        chip.addEventListener('touchend', e => {
+          if (chip._ghost) { chip._ghost.remove(); chip._ghost = null; }
+          const touch = e.changedTouches[0];
+          const el = document.elementFromPoint(touch.clientX, touch.clientY);
+          const zt = el && el.closest('.dnd-zone-target');
+          if (zt) { zt.textContent = chip.textContent; zt.dataset.placed = chip._answer; chip.classList.add('placed'); }
+          zones.forEach(z => { const t = $('.dnd-zone-target', z); if (t) t.classList.remove('drag-over'); });
+        });
+      });
+    }
+    window.checkDnD = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.dnd-zone', container).forEach(zone => {
+        const target = $('.dnd-zone-target', zone);
+        if (!target || !target.dataset.placed) return;
+        if (target.dataset.placed === zone.dataset.correct) target.classList.add('correct-placed');
+        else target.classList.add('incorrect-placed');
+      });
+    };
+    window.resetDnD = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.dnd-zone-target', container).forEach(t => { t.textContent = 'Drop here'; delete t.dataset.placed; t.classList.remove('correct-placed', 'incorrect-placed'); });
+      $$('.dnd-chip', container).forEach(c => c.classList.remove('placed', 'dragging'));
+    };
+    $$('.dnd-container').forEach(el => initDnD(el));
+
+    /* ── ARCH DIAGRAM ── */
+    $$('.arch-component').forEach(comp => {
+      comp.addEventListener('click', function () {
+        const diagram = this.closest('.arch-diagram');
+        $$('.arch-component', diagram).forEach(c => c.classList.remove('active'));
+        this.classList.add('active');
+        const descEl = $('.arch-description', diagram);
+        if (descEl) descEl.textContent = this.dataset.desc || '';
+      });
+    });
+
+    /* ── FLOW ANIMATION ── */
+    function initFlow(containerEl) {
+      if (!containerEl) return;
+      const stepsData = JSON.parse(containerEl.dataset.steps || '[]');
+      const labelEl = $('.flow-step-label', containerEl);
+      const progressEl = $('.flow-progress', containerEl);
+      const packet = $('.flow-packet', containerEl);
+      let step = 0;
+      function updateProgress() { if (progressEl) progressEl.textContent = 'Step ' + step + ' / ' + stepsData.length; }
+      function animatePacket(fromId, toId) {
+        if (!packet) return;
+        const fromEl = $('#' + fromId), toEl = $('#' + toId);
+        if (!fromEl || !toEl) return;
+        const fromR = fromEl.getBoundingClientRect(), toR = toEl.getBoundingClientRect(), contR = containerEl.getBoundingClientRect();
+        const fx = fromR.left + fromR.width / 2 - contR.left, fy = fromR.top + fromR.height / 2 - contR.top;
+        const tx = toR.left + toR.width / 2 - contR.left, ty = toR.top + toR.height / 2 - contR.top;
+        packet.style.setProperty('--packet-from-x', fx + 'px'); packet.style.setProperty('--packet-from-y', fy + 'px');
+        packet.style.setProperty('--packet-to-x', tx + 'px'); packet.style.setProperty('--packet-to-y', ty + 'px');
+        packet.style.display = 'block'; packet.style.animation = 'none'; packet.offsetHeight;
+        packet.style.animation = 'packetMove 0.8s var(--ease-in-out) forwards';
+        setTimeout(() => { packet.style.display = 'none'; }, 850);
+      }
+      function next() {
+        if (step >= stepsData.length) return;
+        const s = stepsData[step];
+        $$('.flow-actor', containerEl).forEach(a => a.classList.remove('active'));
+        if (s.highlight) { const hEl = $('#flow-' + s.highlight, containerEl); if (hEl) hEl.classList.add('active'); }
+        if (s.packet && s.from && s.to) animatePacket('flow-' + s.from, 'flow-' + s.to);
+        if (labelEl) labelEl.textContent = s.label || '';
+        step++; updateProgress();
+      }
+      function reset() {
+        step = 0;
+        $$('.flow-actor', containerEl).forEach(a => a.classList.remove('active'));
+        const apiEl = $('#flow-api', containerEl); if (apiEl) apiEl.classList.add('active');
+        if (labelEl) labelEl.textContent = 'Click "Next step" to begin the journey';
+        if (packet) packet.style.display = 'none';
+        updateProgress();
+      }
+      const nextBtn = $('.flow-next-btn', containerEl), resetBtn = $('.flow-reset-btn', containerEl);
+      if (nextBtn) nextBtn.addEventListener('click', next);
+      if (resetBtn) resetBtn.addEventListener('click', reset);
+      updateProgress();
+    }
+    $$('.flow-animation').forEach(el => initFlow(el));
+  })();
+  </script>
+</body>
+</html>

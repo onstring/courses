@@ -1,0 +1,1621 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Reserving the Cloud — warre → blazar → nova</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400;1,9..40,500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <style>
+  /* ── DESIGN TOKENS ─────────────────────────────────────────── */
+  :root {
+    --color-bg:             #FAF7F2;
+    --color-bg-warm:        #F5F0E8;
+    --color-bg-code:        #1E1E2E;
+    --color-text:           #2C2A28;
+    --color-text-secondary: #6B6560;
+    --color-text-muted:     #9E9790;
+    --color-border:         #E5DFD6;
+    --color-border-light:   #EEEBE5;
+    --color-surface:        #FFFFFF;
+    --color-surface-warm:   #FDF9F3;
+
+    /* ACCENT — deep rose, for the booking ledger */
+    --color-accent:         #B23A5C;
+    --color-accent-hover:   #96304D;
+    --color-accent-light:   #F8E7EC;
+    --color-accent-muted:   #C97D95;
+
+    --color-success:        #2D8B55;
+    --color-success-light:  #E8F5EE;
+    --color-error:          #C93B3B;
+    --color-error-light:    #FDE8E8;
+    --color-info:           #2A7B9B;
+    --color-info-light:     #E4F2F7;
+
+    --color-actor-1:        #D94F30;
+    --color-actor-2:        #2A7B9B;
+    --color-actor-3:        #7B6DAA;
+    --color-actor-4:        #D4A843;
+    --color-actor-5:        #2D8B55;
+
+    --font-display: 'Bricolage Grotesque', Georgia, serif;
+    --font-body:    'DM Sans', -apple-system, sans-serif;
+    --font-mono:    'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+
+    --text-xs:   0.75rem;
+    --text-sm:   0.875rem;
+    --text-base: 1rem;
+    --text-lg:   1.125rem;
+    --text-xl:   1.25rem;
+    --text-2xl:  1.5rem;
+    --text-3xl:  1.875rem;
+    --text-4xl:  2.25rem;
+    --text-5xl:  3rem;
+    --text-6xl:  3.75rem;
+
+    --leading-tight:  1.15;
+    --leading-snug:   1.3;
+    --leading-normal: 1.6;
+    --leading-loose:  1.8;
+
+    --space-1:  0.25rem; --space-2:  0.5rem; --space-3:  0.75rem;
+    --space-4:  1rem;    --space-5:  1.25rem; --space-6:  1.5rem;
+    --space-8:  2rem;    --space-10: 2.5rem;  --space-12: 3rem;
+    --space-16: 4rem;    --space-20: 5rem;    --space-24: 6rem;
+
+    --content-width:      800px;
+    --content-width-wide: 1000px;
+    --nav-height:         50px;
+
+    --radius-sm:   8px;  --radius-md:   12px;
+    --radius-lg:   16px; --radius-full: 9999px;
+
+    --shadow-sm: 0 1px 2px rgba(44,42,40,0.05);
+    --shadow-md: 0 4px 12px rgba(44,42,40,0.08);
+    --shadow-lg: 0 8px 24px rgba(44,42,40,0.10);
+    --shadow-xl: 0 16px 48px rgba(44,42,40,0.12);
+
+    --ease-out:    cubic-bezier(0.16,1,0.3,1);
+    --ease-in-out: cubic-bezier(0.65,0,0.35,1);
+    --duration-fast:   150ms;
+    --duration-normal: 300ms;
+    --duration-slow:   500ms;
+    --stagger-delay:   120ms;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-snap-type: y proximity; scroll-behavior: smooth; }
+  body {
+    font-family: var(--font-body);
+    font-size: var(--text-base);
+    color: var(--color-text);
+    line-height: var(--leading-normal);
+    background: var(--color-bg);
+    background-image: radial-gradient(ellipse at 20% 50%, rgba(178,58,92,0.04) 0%, transparent 50%);
+  }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: var(--radius-full); }
+
+  pre, code { white-space: pre-wrap; word-break: break-word; overflow-x: hidden; }
+  .translation-code::-webkit-scrollbar, pre::-webkit-scrollbar { display: none; }
+
+  .code-keyword  { color: #CBA6F7; }
+  .code-string   { color: #A6E3A1; }
+  .code-function { color: #89B4FA; }
+  .code-comment  { color: #6C7086; }
+  .code-number   { color: #FAB387; }
+  .code-property { color: #F9E2AF; }
+  .code-operator { color: #94E2D5; }
+  .code-class    { color: #F9E2AF; }
+  .code-line     { display: block; }
+
+  /* ── NAV ── */
+  .nav {
+    position: fixed; top: 0; left: 0; right: 0;
+    height: var(--nav-height); z-index: 1000;
+    background: rgba(250,247,242,0.92); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--color-border-light);
+  }
+  .progress-bar { position: absolute; bottom: 0; left: 0; height: 2px; width: 0%; background: var(--color-accent); transition: width 100ms linear; }
+  .nav-inner { max-width: var(--content-width-wide); margin: 0 auto; padding: 0 var(--space-6); height: 100%; display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
+  .nav-title { font-family: var(--font-display); font-size: var(--text-sm); font-weight: 600; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; }
+  .nav-dots { display: flex; align-items: center; gap: var(--space-2); }
+  .nav-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--color-text-muted); background: transparent; cursor: pointer; transition: all var(--duration-fast); position: relative; }
+  .nav-dot::after { content: attr(data-tooltip); position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: var(--color-bg-code); color: #CDD6F4; font-family: var(--font-body); font-size: var(--text-xs); white-space: nowrap; padding: var(--space-1) var(--space-3); border-radius: var(--radius-sm); pointer-events: none; opacity: 0; transition: opacity var(--duration-fast); }
+  .nav-dot:hover::after { opacity: 1; }
+  .nav-dot.active { border-color: var(--color-accent); background: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-light); }
+  .nav-dot.visited { border-color: var(--color-accent-muted); background: var(--color-accent-muted); }
+
+  /* ── MODULE ── */
+  .module { min-height: 100dvh; min-height: 100vh; scroll-snap-align: start; padding: var(--space-16) var(--space-6); padding-top: calc(var(--nav-height) + var(--space-12)); }
+  .module-content { max-width: var(--content-width); margin: 0 auto; }
+  .module-header { margin-bottom: var(--space-12); }
+  .module-number { display: block; font-family: var(--font-display); font-size: var(--text-6xl); font-weight: 800; color: var(--color-accent); opacity: 0.15; line-height: 1; margin-bottom: var(--space-2); }
+  .module-title { font-family: var(--font-display); font-size: var(--text-4xl); font-weight: 700; line-height: var(--leading-tight); color: var(--color-text); }
+  .module-subtitle { margin-top: var(--space-3); font-size: var(--text-lg); color: var(--color-text-secondary); line-height: var(--leading-snug); }
+  .screen { margin-bottom: var(--space-16); }
+  .screen-heading { font-family: var(--font-display); font-size: var(--text-2xl); font-weight: 600; color: var(--color-text); margin-bottom: var(--space-6); line-height: var(--leading-snug); }
+  p { margin-bottom: var(--space-4); }
+  p:last-child { margin-bottom: 0; }
+  .lead { font-size: var(--text-lg); }
+
+  /* ── ANIMATIONS ── */
+  .animate-in { opacity: 0; transform: translateY(20px); transition: opacity var(--duration-slow) var(--ease-out), transform var(--duration-slow) var(--ease-out); }
+  .animate-in.visible { opacity: 1; transform: translateY(0); }
+  .stagger-children > .animate-in { transition-delay: calc(var(--stagger-index, 0) * var(--stagger-delay)); }
+
+  /* ── HERO ── */
+  .hero { min-height: 100vh; display: flex; flex-direction: column; justify-content: center; padding: var(--space-16) var(--space-6); max-width: var(--content-width); margin: 0 auto; }
+  .hero-eyebrow { font-family: var(--font-mono); font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.15em; color: var(--color-accent); margin-bottom: var(--space-4); }
+  .hero-title { font-family: var(--font-display); font-size: var(--text-6xl); font-weight: 800; line-height: 1.05; margin-bottom: var(--space-6); }
+  .hero-sub { font-size: var(--text-xl); color: var(--color-text-secondary); max-width: 640px; margin-bottom: var(--space-8); }
+  .hero-meta { display: flex; gap: var(--space-6); flex-wrap: wrap; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-text-muted); }
+  .hero-meta span { display: flex; align-items: center; gap: var(--space-2); }
+
+  /* ── TRANSLATION ── */
+  .translation-block { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-radius: var(--radius-md); overflow: hidden; box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .translation-code { background: var(--color-bg-code); color: #CDD6F4; padding: var(--space-6); font-family: var(--font-mono); font-size: var(--text-sm); line-height: 1.7; position: relative; overflow-x: hidden; }
+  .translation-english { background: var(--color-surface-warm); padding: var(--space-6); font-size: var(--text-sm); line-height: 1.7; border-left: 3px solid var(--color-accent); }
+  .translation-label { position: absolute; top: var(--space-2); right: var(--space-3); font-family: var(--font-mono); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.5; }
+  .translation-english .translation-label { position: static; display: block; margin-bottom: var(--space-3); color: var(--color-text-muted); }
+  .translation-english strong { color: var(--color-text); }
+  .file-ref { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-accent); background: var(--color-accent-light); padding: 1px 6px; border-radius: 4px; }
+
+  /* ── FLOW ANIMATION ── */
+  .flow-animation { position: relative; background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-8); box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .flow-actors { display: flex; justify-content: center; align-items: center; gap: var(--space-4); margin-bottom: var(--space-8); flex-wrap: wrap; }
+  .flow-actor { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); transition: all var(--duration-normal) var(--ease-out); }
+  .flow-actor-icon { width: 54px; height: 54px; border-radius: var(--radius-md); background: var(--color-bg-warm); border: 2px solid var(--color-border); display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-size: var(--text-base); font-weight: 700; transition: all var(--duration-normal) var(--ease-out); color: var(--color-text-secondary); }
+  .flow-actor span { font-size: var(--text-xs); color: var(--color-text-secondary); font-family: var(--font-mono); text-align: center; }
+  .flow-actor.active .flow-actor-icon { border-color: var(--color-accent); background: var(--color-accent-light); box-shadow: 0 0 0 3px var(--color-accent-light), 0 0 20px rgba(178,58,92,0.18); transform: scale(1.12); color: var(--color-accent-hover); }
+  .flow-packet { width: 16px; height: 16px; border-radius: 50%; background: var(--color-accent); position: absolute; pointer-events: none; display: none; box-shadow: 0 0 8px rgba(178,58,92,0.6); z-index: 5; }
+  .flow-step-label { text-align: center; font-size: var(--text-sm); color: var(--color-text); min-height: 3em; padding: var(--space-3) var(--space-4); background: var(--color-bg-warm); border-radius: var(--radius-sm); margin-bottom: var(--space-6); line-height: var(--leading-normal); }
+  .flow-controls { display: flex; align-items: center; gap: var(--space-3); }
+  .flow-progress { margin-left: auto; font-size: var(--text-xs); color: var(--color-text-muted); font-family: var(--font-mono); }
+
+  /* ── ARCH DIAGRAM ── */
+  .arch-diagram { background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-8); box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .arch-zone { border: 1px dashed var(--color-border); border-radius: var(--radius-md); padding: var(--space-6); margin-bottom: var(--space-4); }
+  .arch-zone-label { font-family: var(--font-mono); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-muted); margin-bottom: var(--space-4); }
+  .arch-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+  .arch-component { display: inline-flex; flex-direction: column; align-items: center; gap: var(--space-2); padding: var(--space-4); background: var(--color-surface-warm); border: 1px solid var(--color-border); border-radius: var(--radius-md); cursor: pointer; margin: var(--space-2); transition: all var(--duration-fast); font-size: var(--text-sm); min-width: 120px; }
+  .arch-component:hover, .arch-component.active { border-color: var(--color-accent); background: var(--color-accent-light); transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+  .arch-component strong { font-family: var(--font-display); }
+  .arch-component small { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+  .arch-description { margin-top: var(--space-4); padding: var(--space-4); background: var(--color-bg-warm); border-radius: var(--radius-sm); font-size: var(--text-sm); color: var(--color-text-secondary); min-height: 2.5em; }
+
+  /* ── CALLOUT ── */
+  .callout { display: flex; gap: var(--space-4); padding: var(--space-5); border-radius: var(--radius-md); margin: var(--space-6) 0; border-left: 4px solid; }
+  .callout-accent  { background: var(--color-accent-light);  border-color: var(--color-accent); }
+  .callout-info    { background: var(--color-info-light);    border-color: var(--color-info); }
+  .callout-warning { background: var(--color-error-light);   border-color: var(--color-error); }
+  .callout-success { background: var(--color-success-light); border-color: var(--color-success); }
+  .callout-icon { font-size: 1.25rem; flex-shrink: 0; margin-top: 2px; }
+  .callout-title { display: block; font-weight: 700; margin-bottom: var(--space-1); }
+  .callout-content p { font-size: var(--text-sm); margin: 0 0 var(--space-2); color: var(--color-text-secondary); }
+  .callout-content p:last-child { margin-bottom: 0; }
+
+  /* ── STEP CARDS ── */
+  .step-cards { display: flex; flex-direction: column; gap: var(--space-3); margin: var(--space-6) 0; }
+  .step-card { display: flex; align-items: flex-start; gap: var(--space-4); padding: var(--space-4) var(--space-5); background: var(--color-surface); border-radius: var(--radius-md); border-left: 3px solid var(--color-accent); box-shadow: var(--shadow-sm); }
+  .step-num { width: 32px; height: 32px; border-radius: 50%; background: var(--color-accent); color: white; font-weight: 700; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); flex-shrink: 0; }
+  .step-body strong { display: block; font-weight: 600; margin-bottom: var(--space-1); }
+  .step-body p { margin: 0; color: var(--color-text-secondary); font-size: var(--text-sm); }
+  .step-body .src { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+
+  /* ── PATTERN CARDS ── */
+  .pattern-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-4); margin: var(--space-6) 0; }
+  .pattern-card { background: var(--color-surface); border-radius: var(--radius-md); padding: var(--space-6); box-shadow: var(--shadow-sm); border-top: 3px solid var(--color-accent); transition: transform var(--duration-normal) var(--ease-out), box-shadow var(--duration-normal); }
+  .pattern-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-md); }
+  .pattern-icon { font-size: 1.5rem; margin-bottom: var(--space-3); }
+  .pattern-title { font-family: var(--font-display); font-size: var(--text-base); font-weight: 700; margin-bottom: var(--space-2); }
+  .pattern-desc { font-size: var(--text-sm); color: var(--color-text-secondary); line-height: var(--leading-normal); margin: 0; }
+  .pattern-desc code { font-family: var(--font-mono); font-size: 0.85em; background: var(--color-bg-warm); border-radius: 4px; padding: 1px 4px; }
+
+  /* ── STATE TIMELINE ── */
+  .state-track { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: var(--space-6) 0; }
+  .state-pill { font-family: var(--font-mono); font-size: var(--text-xs); padding: var(--space-2) var(--space-3); border-radius: var(--radius-full); background: var(--color-surface); border: 1px solid var(--color-border); }
+  .state-pill.vm { background: var(--color-accent-light); border-color: var(--color-accent-muted); color: var(--color-accent-hover); font-weight: 600; }
+  .state-pill.task { background: var(--color-surface-warm); color: var(--color-text-secondary); }
+  .state-pill.done { background: var(--color-success-light); border-color: var(--color-success); color: var(--color-success); font-weight: 600; }
+  .state-pill.err { background: var(--color-error-light); border-color: var(--color-error); color: var(--color-error); font-weight: 600; }
+  .state-arrow { color: var(--color-text-muted); }
+  .state-lane { display: flex; align-items: center; gap: var(--space-3); margin: var(--space-3) 0; flex-wrap: wrap; }
+  .state-lane-label { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); min-width: 130px; }
+
+  /* ── OPS CHECK (terminal verification panel) ── */
+  .ops-check { background: var(--color-bg-code); border-radius: var(--radius-md); margin: var(--space-6) 0; box-shadow: var(--shadow-md); overflow: hidden; }
+  .ops-check-head { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-5); background: rgba(255,255,255,0.05); border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .ops-check-badge { font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #1E1E2E; background: #A6E3A1; padding: 2px 8px; border-radius: 4px; flex-shrink: 0; }
+  .ops-check-title { font-size: var(--text-sm); color: #CDD6F4; font-family: var(--font-body); }
+  .ops-check-body { padding: var(--space-5); font-family: var(--font-mono); font-size: var(--text-sm); line-height: 1.75; color: #CDD6F4; }
+  .ops-check-body .prompt { color: #6C7086; user-select: none; }
+  .ops-check-body .cmd { color: #A6E3A1; }
+  .ops-check-body .out { color: #9399B2; }
+  .ops-check-body .hl { color: #F9E2AF; }
+  .ops-check-body .note { color: #89B4FA; font-style: italic; }
+
+  /* ── GROUP CHAT ── */
+  .chat-container { background: var(--color-surface); border-radius: var(--radius-lg); box-shadow: var(--shadow-md); margin: var(--space-8) 0; padding: var(--space-6); }
+  .chat-header { display: flex; align-items: baseline; gap: var(--space-3); border-bottom: 1px solid var(--color-border); padding-bottom: var(--space-4); margin-bottom: var(--space-5); }
+  .chat-header strong { font-family: var(--font-display); font-size: var(--text-lg); }
+  .chat-header small { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+  .chat-messages { display: flex; flex-direction: column; gap: var(--space-4); min-height: 100px; }
+  .chat-msg { display: flex; gap: var(--space-3); max-width: 88%; opacity: 0; transform: translateY(10px); transition: opacity var(--duration-normal) var(--ease-out), transform var(--duration-normal) var(--ease-out); }
+  .chat-msg.shown { opacity: 1; transform: translateY(0); }
+  .chat-msg.right { align-self: flex-end; flex-direction: row-reverse; }
+  .chat-avatar { width: 36px; height: 36px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-weight: 700; font-size: var(--text-xs); color: white; flex-shrink: 0; }
+  .chat-bubble { background: var(--color-bg-warm); border-radius: 14px; padding: var(--space-3) var(--space-4); font-size: var(--text-sm); line-height: var(--leading-normal); }
+  .chat-msg.right .chat-bubble { background: var(--color-accent-light); }
+  .chat-name { font-size: var(--text-xs); color: var(--color-text-muted); font-family: var(--font-mono); margin-bottom: 2px; }
+  .chat-bubble code { font-family: var(--font-mono); font-size: 0.85em; background: rgba(44,42,40,0.07); border-radius: 4px; padding: 1px 4px; }
+  .chat-controls { display: flex; gap: var(--space-3); margin-top: var(--space-5); }
+
+  /* ── QUIZ ── */
+  .quiz-container { background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-8); box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .quiz-question-block { margin-bottom: var(--space-8); }
+  .quiz-question-block:last-of-type { margin-bottom: 0; }
+  .quiz-question { font-family: var(--font-display); font-size: var(--text-lg); font-weight: 600; margin-bottom: var(--space-4); line-height: var(--leading-snug); }
+  .quiz-options { display: flex; flex-direction: column; gap: var(--space-2); }
+  .quiz-option { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: 2px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); cursor: pointer; width: 100%; text-align: left; font-family: var(--font-body); font-size: var(--text-base); transition: border-color var(--duration-fast), background var(--duration-fast); }
+  .quiz-option:hover:not(:disabled) { border-color: var(--color-accent-muted); }
+  .quiz-option.selected { border-color: var(--color-accent); background: var(--color-accent-light); }
+  .quiz-option.correct  { border-color: var(--color-success); background: var(--color-success-light); }
+  .quiz-option.incorrect{ border-color: var(--color-error);   background: var(--color-error-light); }
+  .quiz-option:disabled { cursor: default; }
+  .quiz-option-radio { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--color-border); flex-shrink: 0; transition: all var(--duration-fast); }
+  .quiz-option.selected .quiz-option-radio { border-color: var(--color-accent); background: var(--color-accent); box-shadow: inset 0 0 0 3px white; }
+  .quiz-option.correct .quiz-option-radio  { border-color: var(--color-success); background: var(--color-success); box-shadow: inset 0 0 0 3px white; }
+  .quiz-option.incorrect .quiz-option-radio{ border-color: var(--color-error);   background: var(--color-error);   box-shadow: inset 0 0 0 3px white; }
+  .quiz-feedback { max-height: 0; overflow: hidden; opacity: 0; transition: max-height var(--duration-normal), opacity var(--duration-normal); font-size: var(--text-sm); border-radius: var(--radius-sm); }
+  .quiz-feedback.show { max-height: 240px; opacity: 1; padding: var(--space-3); margin-top: var(--space-2); }
+  .quiz-feedback.success { background: var(--color-success-light); color: var(--color-success); }
+  .quiz-feedback.error   { background: var(--color-error-light);   color: var(--color-error); }
+  .quiz-feedback.warning { background: var(--color-info-light);    color: var(--color-info); }
+  .quiz-check-btn, .quiz-reset-btn { margin-top: var(--space-6); padding: var(--space-3) var(--space-6); border-radius: var(--radius-sm); font-family: var(--font-body); font-size: var(--text-sm); font-weight: 600; cursor: pointer; border: none; transition: background var(--duration-fast), transform var(--duration-fast); }
+  .quiz-check-btn { background: var(--color-accent); color: white; margin-right: var(--space-3); }
+  .quiz-check-btn:hover { background: var(--color-accent-hover); transform: translateY(-1px); }
+  .quiz-reset-btn { background: var(--color-surface); color: var(--color-text-secondary); border: 1px solid var(--color-border); }
+  .quiz-reset-btn:hover { border-color: var(--color-accent-muted); }
+
+  /* ── DND ── */
+  .dnd-container { margin: var(--space-8) 0; }
+  .dnd-chips { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-bottom: var(--space-6); }
+  .dnd-chip { padding: var(--space-2) var(--space-4); background: var(--color-accent); color: white; border-radius: var(--radius-full); font-size: var(--text-sm); font-weight: 600; cursor: grab; user-select: none; transition: opacity var(--duration-fast), transform var(--duration-fast); font-family: var(--font-mono); }
+  .dnd-chip:active { cursor: grabbing; transform: scale(1.05); }
+  .dnd-chip.dragging { opacity: 0.4; }
+  .dnd-chip.placed { opacity: 0.3; pointer-events: none; }
+  .dnd-zones { display: flex; flex-direction: column; gap: var(--space-4); }
+  .dnd-zone { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); background: var(--color-surface); }
+  .dnd-zone-label { font-size: var(--text-sm); color: var(--color-text-secondary); margin-bottom: var(--space-3); }
+  .dnd-zone-target { min-height: 40px; border: 2px dashed var(--color-border); border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; font-size: var(--text-sm); color: var(--color-text-muted); transition: border-color var(--duration-fast), background var(--duration-fast); }
+  .dnd-zone-target.drag-over { border-color: var(--color-accent); background: var(--color-accent-light); }
+  .dnd-zone-target.correct-placed { border-color: var(--color-success); background: var(--color-success-light); color: var(--color-success); font-weight: 600; }
+  .dnd-zone-target.incorrect-placed{ border-color: var(--color-error); background: var(--color-error-light); }
+  .btn { padding: var(--space-2) var(--space-5); border-radius: var(--radius-sm); border: 1px solid var(--color-border); background: var(--color-surface); font-family: var(--font-body); font-size: var(--text-sm); font-weight: 600; cursor: pointer; transition: all var(--duration-fast); color: var(--color-text-secondary); }
+  .btn:hover { border-color: var(--color-accent-muted); color: var(--color-accent); }
+  .btn-primary { background: var(--color-accent); color: white; border-color: var(--color-accent); }
+  .btn-primary:hover { background: var(--color-accent-hover); border-color: var(--color-accent-hover); color: white; }
+
+  /* ── GLOSSARY ── */
+  .term { border-bottom: 1.5px dashed var(--color-accent-muted); cursor: pointer; }
+  .term:hover, .term.active { border-bottom-color: var(--color-accent); color: var(--color-accent); }
+  .term-tooltip { position: fixed; background: var(--color-bg-code); color: #CDD6F4; padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); font-size: var(--text-sm); font-family: var(--font-body); line-height: var(--leading-normal); width: max(200px, min(320px, 80vw)); box-shadow: var(--shadow-lg); pointer-events: none; opacity: 0; transition: opacity var(--duration-fast); z-index: 10000; }
+  .term-tooltip::after { content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 6px solid transparent; border-top-color: var(--color-bg-code); }
+  .term-tooltip.visible { opacity: 1; }
+  .term-tooltip.flip::after { top: auto; bottom: 100%; border-top-color: transparent; border-bottom-color: var(--color-bg-code); }
+
+  .footer { text-align: center; padding: var(--space-16) var(--space-6); color: var(--color-text-muted); font-size: var(--text-sm); border-top: 1px solid var(--color-border-light); }
+
+  @media (max-width: 768px) {
+    :root { --text-4xl: 1.875rem; --text-5xl: 2.25rem; --text-6xl: 3rem; }
+    .translation-block { grid-template-columns: 1fr; }
+    .translation-english { border-left: none; border-top: 3px solid var(--color-accent); }
+    .pattern-cards { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 480px) {
+    :root { --text-4xl: 1.5rem; --text-5xl: 1.875rem; --text-6xl: 2.25rem; }
+    .module { padding: var(--space-8) var(--space-4); }
+    .pattern-cards { grid-template-columns: 1fr; }
+    .nav-title { max-width: 150px; }
+  }
+
+  @keyframes packetMove {
+    from { left: var(--packet-from-x); top: var(--packet-from-y); opacity: 0; }
+    20%  { opacity: 1; }
+    80%  { opacity: 1; }
+    to   { left: var(--packet-to-x); top: var(--packet-to-y); opacity: 0; }
+  }
+  </style>
+</head>
+<body>
+
+  <nav class="nav" id="nav">
+    <div class="progress-bar" id="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+    <div class="nav-inner">
+      <span class="nav-title">The Reservation Lifecycle</span>
+      <div class="nav-dots" id="nav-dots" role="tablist">
+        <button class="nav-dot" data-target="hero" data-tooltip="Start" role="tab" aria-label="Start"></button>
+        <button class="nav-dot" data-target="module-0" data-tooltip="The Cast" role="tab" aria-label="Module 0"></button>
+        <button class="nav-dot" data-target="module-1" data-tooltip="The Booking" role="tab" aria-label="Module 1"></button>
+        <button class="nav-dot" data-target="module-2" data-tooltip="The Lease" role="tab" aria-label="Module 2"></button>
+        <button class="nav-dot" data-target="module-3" data-tooltip="Ground Prepared" role="tab" aria-label="Module 3"></button>
+        <button class="nav-dot" data-target="module-4" data-tooltip="The Clock Fires" role="tab" aria-label="Module 4"></button>
+        <button class="nav-dot" data-target="module-5" data-tooltip="Booting Reserved" role="tab" aria-label="Module 5"></button>
+        <button class="nav-dot" data-target="module-6" data-tooltip="The End &amp; Teardown" role="tab" aria-label="Module 6"></button>
+        <button class="nav-dot" data-target="module-7" data-tooltip="Troubleshooting Playbook" role="tab" aria-label="Module 7"></button>
+      </div>
+    </div>
+  </nav>
+
+  <main id="main">
+
+  <!-- ════════════ HERO ════════════ -->
+  <section class="module" id="hero" style="background: var(--color-bg);">
+    <div class="hero">
+      <div class="hero-eyebrow animate-in">Nectar Cloud · warre → blazar → nova/placement</div>
+      <h1 class="hero-title animate-in">What really happens<br>when you reserve a GPU?</h1>
+      <p class="hero-sub animate-in">A researcher books four GPU nodes for next Tuesday. Between that click and the moment their instances boot on exactly the right hypervisors sit three services, two databases you rarely look at, and a private flavor with two magic extra specs. This course traces the whole lifecycle from the source — and at every step shows the CLI to prove the system did what it should.</p>
+      <div class="hero-meta animate-in">
+        <span>⏱️ ~22 min</span>
+        <span>🧩 warre · blazar · nova · placement</span>
+        <span>🔎 an ops check at every step</span>
+      </div>
+      <p class="animate-in" style="margin-top: var(--space-8); font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted);">Traced from warre @ master, blazar @ 2025.1, nova @ nectar/2024.1. All code excerpts are exact quotes.</p>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 0 — THE CAST ════════════ -->
+  <section class="module" id="module-0" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">00</span>
+        <h1 class="module-title">The cast: a booking system in three layers</h1>
+        <p class="module-subtitle">Think of an airline. There is the travel agent who sells you the ticket, the airline's reservation system that assigns you an aircraft and a seat, and the airport operations that actually fly the plane. Nectar's reservation stack has exactly those three layers.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Why reservations exist at all</h2>
+          <p>GPUs are scarce. On-demand boots fail with <code>NoValidHost</code> the moment capacity runs out, and a researcher who needs eight GPUs for a workshop on Tuesday cannot gamble on luck. A reservation <em>guarantees</em> capacity for a time window — by fencing real hypervisor capacity off ahead of time.</p>
+          <div class="pattern-cards stagger-children">
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">🧾</div>
+              <div class="pattern-title">warre — the travel agent</div>
+              <p class="pattern-desc">Nectar's own booking desk (only some sites use it). Owns the flavor <em>catalogue</em>, quotas, the availability calendar, maintenance windows and user emails. Never touches nova itself — it delegates every booking to blazar.</p>
+            </div>
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">📅</div>
+              <div class="pattern-title">blazar — the reservation system</div>
+              <p class="pattern-desc">The upstream OpenStack reservation service. Owns <em>leases</em>, picks the backing hosts, schedules start/end <em>events</em>, and creates all the nova and placement plumbing each reservation needs.</p>
+            </div>
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">✈️</div>
+              <div class="pattern-title">nova + placement — the airline ops</div>
+              <p class="pattern-desc">nova boots the instances; <span class="term" data-definition="OpenStack's resource inventory service. It tracks resource providers (like compute nodes), their inventories (VCPU, memory, custom classes) and allocations (who consumes what).">placement</span> is the seat map — the ledger that decides which requests fit on which hosts. Blazar manipulates that ledger so reserved capacity is only visible to the reservation holder.</p>
+            </div>
+          </div>
+          <div class="callout callout-info">
+            <div class="callout-icon">🗺️</div>
+            <div class="callout-content">
+              <span class="callout-title">Not every site runs warre</span>
+              <p>Sites without warre drive blazar directly with <code>openstack reservation lease create</code>. Everything from Module 2 onwards applies to them unchanged — warre is a layer on top, not a replacement.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The map — click each service</h2>
+          <div class="arch-diagram">
+            <div class="arch-zone">
+              <div class="arch-zone-label">Nectar layer (warre)</div>
+              <div class="arch-row">
+                <div class="arch-component" data-desc="Flask REST API (port 5000). Authenticates via keystonemiddleware, enforces quota with oslo.limit, validates the booking against the flavor calendar, writes the reservation row, then casts to the worker. Endpoints: /v1/reservations/, /v1/flavors/, /v1/flavors/<id>/freeslots/, /v1/limits/."><strong>warre-api</strong><small>REST · quota · calendar</small></div>
+                <div class="arch-component" data-desc="Listens on RabbitMQ topic warre-worker. Creates the blazar lease as a bot user scoped to the customer's project. Also runs periodic tasks every 30 min: purge old COMPLETE rows, emit exists/in_use audit notifications, and mark overdue ACTIVE reservations COMPLETE."><strong>warre-worker</strong><small>bot · lease create</small></div>
+                <div class="arch-component" data-desc="Listens for blazar's lease.event.* notifications (exchange ceilometer, topic warre). Flips reservation status to ACTIVE / COMPLETE and sends the user emails through the taynac helpdesk notifier."><strong>warre-notification</strong><small>events → status</small></div>
+              </div>
+            </div>
+            <div class="arch-zone">
+              <div class="arch-zone-label">Reservation layer (blazar)</div>
+              <div class="arch-row">
+                <div class="arch-component" data-desc="REST API for leases and hosts. Wraps each lease in a keystone trust so blazar can act on the user's behalf later, then makes a blocking RPC call to blazar-manager on topic blazar.manager."><strong>blazar-api</strong><small>REST · trusts</small></div>
+                <div class="arch-component" data-desc="The engine. Runs the resource plugins (virtual:instance, flavor:instance, physical:host), polls the events table every 10 seconds (hard-coded), fires start_lease/end_lease, and runs the host-failure monitor and healing."><strong>blazar-manager</strong><small>plugins · event poller</small></div>
+              </div>
+            </div>
+            <div class="arch-zone">
+              <div class="arch-zone-label">Core OpenStack</div>
+              <div class="arch-row">
+                <div class="arch-component" data-desc="Boots instances. For a reserved boot, the reservation flavor's extra specs steer scheduling: resources:CUSTOM_RESERVATION_* goes into the placement query; aggregate_instance_extra_specs:reservation is matched by a host filter."><strong>nova</strong><small>api · scheduler · compute</small></div>
+                <div class="arch-component" data-desc="The resource ledger. Blazar creates a custom resource class per reservation and a child resource provider blazar_<host> under each reserved compute node, carrying that class as inventory. Instance allocations then span the root compute RP and the blazar child RP."><strong>placement</strong><small>resource classes · providers</small></div>
+                <div class="arch-component" data-desc="Message bus for everything: warre-api → warre-worker casts, blazar-api → blazar-manager RPC calls, and the notification exchange warre listens on."><strong>RabbitMQ</strong><small>rpc · notifications</small></div>
+                <div class="arch-component" data-desc="Identity. Three special credentials appear in this story: the warre bot user (granted a role in your project to create the lease), the blazar trust (lets blazar act as you at lease start/end), and blazar's os_admin_* account (used for nova/placement admin calls)."><strong>keystone</strong><small>bot · trust · admin</small></div>
+              </div>
+            </div>
+            <div class="arch-description" id="arch-desc-0">Click a component to see what it does in the reservation story.</div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The whole lifecycle, as a group chat</h2>
+          <p>Before the deep dive, here is the entire story in one conversation. Press play.</p>
+          <div class="chat-container" id="chat-lifecycle">
+            <div class="chat-header"><strong>#reservation-lifecycle</strong><small>5 participants</small></div>
+            <div class="chat-messages">
+              <div class="chat-msg right"><div class="chat-avatar" style="background: var(--color-actor-1);">RS</div><div><div class="chat-name">researcher</div><div class="chat-bubble">Hi warre — I need 4 GPU nodes, next Tuesday 09:00 to 17:00. 🙏</div></div></div>
+              <div class="chat-msg"><div class="chat-avatar" style="background: var(--color-accent);">WR</div><div><div class="chat-name">warre</div><div class="chat-bubble">Checking quota and the calendar… the slot is free. Booked — your reservation is <code>PENDING_CREATE</code>. My worker will take it from here.</div></div></div>
+              <div class="chat-msg"><div class="chat-avatar" style="background: var(--color-accent);">WR</div><div><div class="chat-name">warre-worker → blazar</div><div class="chat-bubble">Bot user here, acting inside the researcher's project. One <code>virtual:instance</code> lease please: amount 4, these vcpus/memory/disk, hosts matching these resource_properties.</div></div></div>
+              <div class="chat-msg"><div class="chat-avatar" style="background: var(--color-actor-3);">BZ</div><div><div class="chat-name">blazar</div><div class="chat-bubble">Found 4 slots on the GPU hosts. Lease is <code>PENDING</code>, events scheduled. nova — one private flavor and one empty aggregate please. placement — register resource class <code>CUSTOM_RESERVATION_9F2A…</code></div></div></div>
+              <div class="chat-msg"><div class="chat-avatar" style="background: var(--color-actor-5);">NV</div><div><div class="chat-name">nova</div><div class="chat-bubble">Flavor <code>reservation:9f2a…</code> created. It is private — right now <em>nobody</em> can boot with it.</div></div></div>
+              <div class="chat-msg"><div class="chat-avatar" style="background: var(--color-actor-4);">PL</div><div><div class="chat-name">placement</div><div class="chat-bubble">Resource class registered. No inventory anywhere yet, so it is worth zero seats. Call me at start time.</div></div></div>
+              <div class="chat-msg"><div class="chat-avatar" style="background: var(--color-actor-3);">BZ</div><div><div class="chat-name">blazar · tuesday 09:00</div><div class="chat-bubble">⏰ <code>start_lease</code>! nova: give the project access to the flavor and put the reserved hosts in the aggregate. placement: inventory <code>CUSTOM_RESERVATION_9F2A… = 4</code> on the <code>blazar_&lt;host&gt;</code> providers.</div></div></div>
+              <div class="chat-msg"><div class="chat-avatar" style="background: var(--color-accent);">WR</div><div><div class="chat-name">warre</div><div class="chat-bubble">Got the <code>lease.event.start_lease</code> notification — reservation is <code>ACTIVE</code>. Emailing the researcher now. 📧</div></div></div>
+              <div class="chat-msg right"><div class="chat-avatar" style="background: var(--color-actor-1);">RS</div><div><div class="chat-name">researcher</div><div class="chat-bubble"><code>openstack server create --flavor 9f2a…</code> ×4 🚀</div></div></div>
+              <div class="chat-msg"><div class="chat-avatar" style="background: var(--color-actor-5);">NV</div><div><div class="chat-name">nova</div><div class="chat-bubble">placement says only the reserved hosts have that resource class — scheduling there. All 4 instances ACTIVE.</div></div></div>
+              <div class="chat-msg"><div class="chat-avatar" style="background: var(--color-actor-3);">BZ</div><div><div class="chat-name">blazar · tuesday 17:00</div><div class="chat-bubble">⏰ <code>end_lease</code>. Deleting every instance on that flavor, then the flavor, the aggregate and the placement inventory. The seats are back in the pool.</div></div></div>
+              <div class="chat-msg"><div class="chat-avatar" style="background: var(--color-accent);">WR</div><div><div class="chat-name">warre</div><div class="chat-bubble">Reservation <code>COMPLETE</code>. Hope you saved your results — the instances are gone for real. 😉</div></div></div>
+            </div>
+            <div class="chat-controls">
+              <button class="btn btn-primary chat-play-btn">▶ Play conversation</button>
+              <button class="btn chat-reset-btn">Reset</button>
+            </div>
+          </div>
+          <div class="callout callout-accent">
+            <div class="callout-icon">💡</div>
+            <div class="callout-content">
+              <span class="callout-title">The one-sentence architecture</span>
+              <p>warre books the slot, blazar fences the capacity, and nova/placement only ever see ordinary flavors, aggregates and inventory — reservations are implemented <em>entirely</em> with standard nova/placement primitives. That is why every step is checkable with the standard CLI.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 1 — THE BOOKING ════════════ -->
+  <section class="module" id="module-1" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">01</span>
+        <h1 class="module-title">The booking: warre says yes or no</h1>
+        <p class="module-subtitle">A reservation begins as <code>POST /v1/reservations</code> with just four fields: <code>flavor_id</code>, <code>start</code>, <code>end</code> and an optional <code>instance_count</code>. Before warre says yes, the request runs a gauntlet.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The gauntlet, in order</h2>
+          <div class="step-cards stagger-children">
+            <div class="step-card animate-in"><div class="step-num">1</div><div class="step-body"><strong>Keystone auth</strong><p>keystonemiddleware validates the token; policy decides who may create, read, extend, delete.</p><span class="src">warre/common/keystone.py</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">2</div><div class="step-body"><strong>Quota via <span class="term" data-definition="OpenStack's unified limits library. Limits are registered centrally in keystone (openstack registered limit create) and services enforce them; warre registers two: 'reservation' (count) and 'hours'.">oslo.limit</span></strong><p>Two limits, both registered in keystone: <code>reservation</code> (how many) and <code>hours</code> (instance_count × duration). Breach → HTTP 413. Only PENDING_CREATE / ALLOCATED / ACTIVE rows count — ERROR and COMPLETE rows consume no quota.</p><span class="src">warre/quota.py:20-53</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">3</div><div class="step-body"><strong>Business rules</strong><p>Flavor must be active; private flavors need a FlavorProject grant; duration ≤ <code>max_length_hours</code>; the window must fit inside the flavor's own start/end; no overlap with a maintenance window (admins can bypass).</p><span class="src">warre/manager.py:38-86</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">4</div><div class="step-body"><strong>The capacity check</strong><p>A sweep-line pass over every overlapping reservation: each flavor has <code>slots</code> concurrent bookings; multi-instance reservations occupy one slot per instance, maintenance windows occupy all of them.</p><span class="src">warre/manager.py:175-305</span></div></div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">"No capacity" — the exact moment it is decided</h2>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">warre/manager.py:88-103</span><br>
+free_slots = <span class="code-keyword">self</span>.<span class="code-function">flavor_free_slots</span>(<br>
+&nbsp;&nbsp;&nbsp;&nbsp;context,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;flavor,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;reservation.start,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;reservation.end,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;reservation,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;include_maintenance=<span class="code-keyword">not</span> bypass_maintenance,<br>
+)<br>
+<br>
+<span class="code-keyword">if</span> free_slots:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;f_start = free_slots[<span class="code-number">0</span>].<span class="code-function">get</span>(<span class="code-string">"start"</span>)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;f_end = free_slots[<span class="code-number">0</span>].<span class="code-function">get</span>(<span class="code-string">"end"</span>)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">if</span> f_start != reservation.start <span class="code-keyword">or</span> f_end &lt; reservation.end:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">raise</span> exceptions.<span class="code-class">InvalidReservation</span>(<span class="code-string">"No capacity"</span>)<br>
+<span class="code-keyword">else</span>:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">raise</span> exceptions.<span class="code-class">InvalidReservation</span>(<span class="code-string">"No capacity"</span>)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Compute every free gap in the calendar; the requested window must sit entirely inside the first one."</strong>
+              <p style="margin-top: var(--space-3);">If a user reports <em>"it says No capacity but the calendar looks free"</em>, the states that block a slot are <code>PENDING_CREATE</code>, <code>ALLOCATED</code> and <code>ACTIVE</code> — including someone's stuck PENDING_CREATE row. ERROR and COMPLETE rows never block. There is also a 60-second guard gap inserted between adjacent bookings.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Accepted → a row and a cast</h2>
+          <p>On success warre commits the row with <code>status=PENDING_CREATE</code>, then hands the real work to its worker with a <span class="term" data-definition="A fire-and-forget RPC message on the queue: the sender does not wait for a reply, and gets no error if nobody consumes it. Contrast with an RPC 'call', which blocks for a response.">cast</span> — and immediately returns success to the user.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">warre/worker/api.py:35-38</span><br>
+<span class="code-keyword">def</span> <span class="code-function">create_lease</span>(<span class="code-keyword">self</span>, ctxt, reservation_id):<br>
+&nbsp;&nbsp;&nbsp;&nbsp;cctxt = <span class="code-keyword">self</span>._client.<span class="code-function">prepare</span>(version=<span class="code-string">"1.0"</span>)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;cctxt.<span class="code-function">cast</span>(ctxt, <span class="code-string">"create_lease"</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;reservation_id=reservation_id)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Tell the worker to create the lease — don't wait for an answer."</strong>
+              <p style="margin-top: var(--space-3);">The API returns as soon as the message is on RabbitMQ topic <code>warre-worker</code>. If the message is lost or no worker is running, <em>nothing retries it</em>. The row stays PENDING_CREATE forever — while still consuming quota and blocking the calendar slot.</p>
+            </div>
+          </div>
+          <div class="state-track">
+            <span class="state-pill vm">PENDING_CREATE</span><span class="state-arrow">→</span>
+            <span class="state-pill vm">ALLOCATED</span><span class="state-arrow">→</span>
+            <span class="state-pill vm">ACTIVE</span><span class="state-arrow">→</span>
+            <span class="state-pill done">COMPLETE</span>
+            <span class="state-arrow" style="margin-left: var(--space-3);">⤷</span>
+            <span class="state-pill err">ERROR</span>
+            <span class="state-pill task">(no CANCELLED — delete removes the row)</span>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">Right after the POST — what should exist</span></div>
+            <div class="ops-check-body">
+              <span class="note"># warre's API is the source of truth for the booking itself.</span><br>
+              <span class="note"># CLI = python-warreclient, an `openstack` plugin: every command starts with `openstack warre`</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack warre reservation show $RID</span><br>
+              <span class="out">| status | <span class="hl">PENDING_CREATE</span> |  | lease_id | None |  | compute_flavor | None |  | status_reason | None |</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack warre reservation list --all-projects --flavor $FLAVOR</span>   <span class="note"># admin: hunt across projects</span><br>
+              <br>
+              <span class="note"># or straight at the warre DB (columns worth knowing by heart)</span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT status, status_reason, lease_id, compute_flavor FROM warre.reservation WHERE id='$RID';</span><br>
+              <br>
+              <span class="note"># the calendar the capacity check ran against</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack warre flavor free-slots $FLAVOR --start 2026-08-12 --end 2026-09-12</span><br>
+              <span class="out">| Start | End |   <span class="note"># gaps where new bookings fit</span></span>
+            </div>
+          </div>
+          <div class="callout callout-warning">
+            <div class="callout-icon">🚨</div>
+            <div class="callout-content">
+              <span class="callout-title">Stuck in PENDING_CREATE?</span>
+              <p>That means the cast was never consumed: warre-worker is down, or RabbitMQ dropped it. There is no periodic retry for this state. Check the worker service and its logs, then delete and re-create the reservation — remember the stuck row is still blocking the slot for everyone else.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 2 — THE LEASE ════════════ -->
+  <section class="module" id="module-2" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">02</span>
+        <h1 class="module-title">The hand-off: a bot books a lease in your project</h1>
+        <p class="module-subtitle">warre never talks to nova. Its worker impersonates a bot user <em>inside the customer's project</em> and asks blazar for a lease. Everything blazar creates therefore belongs to the user's project — not to warre.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Step one: become the bot</h2>
+          <div class="step-cards stagger-children">
+            <div class="step-card animate-in"><div class="step-num">1</div><div class="step-body"><strong>Grant the bot a role</strong><p>The worker grants <code>bot_user_id</code> the role <code>bot_role_id</code> on the customer's project via keystone admin.</p><span class="src">warre/worker/manager.py:82-90 · ensure_bot_access()</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">2</div><div class="step-body"><strong>Build a project-scoped session</strong><p>Password auth as the bot, scoped to <code>reservation.project_id</code>. From keystone's point of view, the bot <em>is</em> a member of the project now.</p><span class="src">warre/worker/manager.py:91-102</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">3</div><div class="step-body"><strong>Find blazar in the catalogue</strong><p>The blazar client is built with <code>service_type="reservation"</code> — no hard-coded endpoint anywhere in warre.</p><span class="src">warre/common/blazar.py:26-34</span></div></div>
+          </div>
+          <div class="callout callout-info">
+            <div class="callout-icon">🕵️</div>
+            <div class="callout-content">
+              <span class="callout-title">Why this matters when you troubleshoot</span>
+              <p>Looking for the lease? It is in the <em>user's</em> project, created by the bot user. <code>openstack reservation lease list</code> as admin shows nothing unless you filter or scope to that project. Bot credential problems (expired password, missing role grants) surface as warre reservations in ERROR with a keystone auth message in <code>status_reason</code>.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The exact payload on the wire</h2>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">warre/common/blazar.py:36-57</span><br>
+<span class="code-keyword">def</span> <span class="code-function">create_lease</span>(<span class="code-keyword">self</span>, reservation):<br>
+&nbsp;&nbsp;&nbsp;&nbsp;reservation_info = {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">"resource_type"</span>: <span class="code-string">"virtual:instance"</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">"amount"</span>: reservation.instance_count,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">"vcpus"</span>: reservation.flavor.vcpu,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">"memory_mb"</span>: reservation.flavor.memory_mb,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">"disk_gb"</span>: reservation.flavor.disk_gb,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">"ephemeral_gb"</span>: reservation.flavor.ephemeral_gb,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">"affinity"</span>: <span class="code-keyword">None</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">"resource_properties"</span>: reservation.flavor.properties,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">"extra_specs"</span>: reservation.flavor.extra_specs,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br>
+&nbsp;&nbsp;&nbsp;&nbsp;name = <span class="code-string">f"Reservation {reservation.id}"</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;start = reservation.start.<span class="code-function">strftime</span>(LEASE_DATE_FORMAT)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;end = reservation.end.<span class="code-function">strftime</span>(LEASE_DATE_FORMAT)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;lease = <span class="code-keyword">self</span>.client.lease.<span class="code-function">create</span>(<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;name=name,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;start=start,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;end=end,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;reservations=[reservation_info],<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;events=[],<br>
+&nbsp;&nbsp;&nbsp;&nbsp;)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"One lease, named after the warre reservation, holding one <code>virtual:instance</code> reservation."</strong>
+              <p style="margin-top: var(--space-3);"><code>resource_properties</code> is blazar's host filter — at Nectar it matches <span class="term" data-definition="Operator-defined key/value tags on blazar hosts (openstack reservation host set --extra key=value). Lease requests can filter hosts by them; nectar-tools' warre-host-flavors keeps a warre_id capability in sync between blazar hosts and warre flavors.">extra capabilities</span> like <code>warre_id</code> on the blazar hosts backing this warre flavor.</p>
+              <p><code>extra_specs</code> and <code>ephemeral_gb</code> are Nectar extensions: upstream blazar 2025.1 only accepts <code>vcpus, memory_mb, disk_gb, amount, affinity, resource_properties</code>. Whether GPU extra specs reach the reserved flavor depends on the site's blazar fork — always verify with <code>openstack flavor show</code>.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Inside blazar: lease, reservation, three alarm clocks</h2>
+          <p>blazar-api wraps the request in a keystone <span class="term" data-definition="A keystone delegation: the trustor (user/bot) lets the trustee (blazar's service user) obtain tokens on their behalf later. Blazar stores a trust_id per lease so it can act at start/end time, long after the original token expired.">trust</span>, then makes a blocking RPC call to blazar-manager. The manager computes candidate hosts, checks usage enforcement, and writes the lease atomically — including its future.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">blazar/manager/service.py:388-393</span><br>
+events.<span class="code-function">append</span>({<span class="code-string">'event_type'</span>: <span class="code-string">'start_lease'</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">'time'</span>: start_date,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">'status'</span>: status.event.UNDONE})<br>
+events.<span class="code-function">append</span>({<span class="code-string">'event_type'</span>: <span class="code-string">'end_lease'</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">'time'</span>: end_date,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">'status'</span>: status.event.UNDONE})
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"A lease's start and end are just rows in the <code>events</code> table, waiting for their time to come."</strong>
+              <p style="margin-top: var(--space-3);">A third row, <code>before_end_lease</code>, defaults to 60 minutes before the end (<code>minutes_before_end_lease</code>). The lease goes CREATING → PENDING; the blazar reservation inside it is <code>pending</code>; all three events are <code>UNDONE</code>. These event rows <em>are</em> the schedule — no cron, no timers, nothing else.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The reply lands back in warre</h2>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">warre/worker/manager.py:70-76</span><br>
+<span class="code-keyword">else</span>:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;reservation.lease_id = lease[<span class="code-string">"id"</span>]<br>
+&nbsp;&nbsp;&nbsp;&nbsp;reservation.compute_flavor = lease.<span class="code-function">get</span>(<span class="code-string">"reservations"</span>)[<span class="code-number">0</span>].<span class="code-function">get</span>(<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">"flavor_id"</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;reservation.status = models.Reservation.ALLOCATED<br>
+&nbsp;&nbsp;&nbsp;&nbsp;LOG.<span class="code-function">info</span>(<span class="code-string">"Created Blazar lease with ID %s"</span>, reservation.lease_id)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Remember the lease, remember the nova flavor blazar made, and mark the booking ALLOCATED."</strong>
+              <p style="margin-top: var(--space-3);"><code>compute_flavor</code> is the flavor users will boot with. On failure the <code>except</code> branch above this sets <code>status=ERROR</code> and copies the exception into <code>status_reason</code> — which is why blazar errors like <code>NotEnoughHostsAvailable</code> appear verbatim in warre.</p>
+            </div>
+          </div>
+          <div class="callout callout-accent">
+            <div class="callout-icon">🪨</div>
+            <div class="callout-content">
+              <span class="callout-title">The ID Rosetta stone</span>
+              <p>Four IDs, easy to confuse: the <strong>warre reservation id</strong> (the lease is named <code>Reservation &lt;id&gt;</code>) · the <strong>blazar lease id</strong> (warre's <code>lease_id</code>) · the <strong>blazar reservation id</strong> inside the lease · and the <strong>nova flavor id</strong>. The last two are <em>the same string</em> — blazar creates the flavor with <code>flavorid=reservation_id</code>, and warre stores it as <code>compute_flavor</code>.</p>
+            </div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">After the worker ran — warre and blazar must agree</span></div>
+            <div class="ops-check-body">
+              <span class="note"># warre side: ALLOCATED, with both IDs filled in</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack warre reservation show $RID -c status -c lease_id -c compute_flavor</span><br>
+              <span class="out">| <span class="hl">ALLOCATED</span> | 42a7…lease | 9f2a…rsv |</span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT status, lease_id, compute_flavor FROM warre.reservation WHERE id='$RID';</span>   <span class="note"># same, from the DB</span><br>
+              <br>
+              <span class="note"># blazar side: the lease exists in the USER's project</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack reservation lease list --project $PROJECT_ID</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack reservation lease show "Reservation $RID"</span><br>
+              <span class="out">status: <span class="hl">PENDING</span>   degraded: False</span><br>
+              <span class="out">reservations: [{"status": "pending", "resource_type": "virtual:instance", ...}]</span><br>
+              <span class="out">events: start_lease/end_lease/before_end_lease — all <span class="hl">UNDONE</span></span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 3 — GROUND PREPARED ════════════ -->
+  <section class="module" id="module-3" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">03</span>
+        <h1 class="module-title">Ground prepared early: four artefacts appear at PENDING</h1>
+        <p class="module-subtitle">Here is the fact that saves you troubleshooting time: blazar builds almost all the nova/placement plumbing when the lease is <em>created</em> — days before it starts. Only the keys to use it are withheld until start time.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">One reservation, four artefacts</h2>
+          <div class="pattern-cards stagger-children">
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">🎫</div>
+              <div class="pattern-title">A private nova flavor</div>
+              <p class="pattern-desc">Named <code>reservation:&lt;rsv-id&gt;</code>, with <code>flavorid = &lt;rsv-id&gt;</code> and <code>is_public=False</code>. Nobody — not even the project — can use it yet.</p>
+            </div>
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">🏝️</div>
+              <div class="pattern-title">An empty host aggregate</div>
+              <p class="pattern-desc">Named <code>&lt;rsv-id&gt;</code>, metadata <code>reservation=&lt;rsv-id&gt;</code>, <code>filter_tenant_id=&lt;project&gt;</code>, <code>blazar:owner</code>. Zero hosts until the lease starts.</p>
+            </div>
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">🧮</div>
+              <div class="pattern-title">A placement resource class</div>
+              <p class="pattern-desc"><code>CUSTOM_RESERVATION_&lt;RSV_ID&gt;</code> (UUID upper-cased, dashes → underscores). Registered, but with zero inventory anywhere — worth nothing yet.</p>
+            </div>
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">📌</div>
+              <div class="pattern-title">Host pinning rows (blazar DB)</div>
+              <p class="pattern-desc"><code>computehost_allocations</code>: one row per instance slot, linking the reservation to concrete hypervisors. The ground truth of <em>which hosts</em> back the booking.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The two extra specs that make everything work</h2>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">blazar/plugins/instances/instance_plugin.py:333-342</span><br>
+<span class="code-comment"># Set extra specs to the flavor</span><br>
+rsv_id_rc_format = reservation_id.<span class="code-function">upper</span>().<span class="code-function">replace</span>(<span class="code-string">"-"</span>, <span class="code-string">"_"</span>)<br>
+reservation_rc = <span class="code-string">"resources:CUSTOM_RESERVATION_"</span> + rsv_id_rc_format<br>
+extra_specs = {<br>
+&nbsp;&nbsp;&nbsp;&nbsp;FLAVOR_EXTRA_SPEC: reservation_id,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;reservation_rc: <span class="code-string">"1"</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;}<br>
+<span class="code-keyword">if</span> group_id <span class="code-keyword">is not</span> <span class="code-keyword">None</span>:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;extra_specs[<span class="code-string">"affinity_id"</span>] = group_id<br>
+reserved_flavor.<span class="code-function">set_keys</span>(extra_specs)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Stamp the flavor with two keys: one for placement, one for the host filter."</strong>
+              <p style="margin-top: var(--space-3);"><code>FLAVOR_EXTRA_SPEC</code> is the constant <code>aggregate_instance_extra_specs:reservation</code> — it must match the aggregate's metadata (module 5).</p>
+              <p><code>resources:CUSTOM_RESERVATION_…=1</code> tells nova to demand one unit of the custom <span class="term" data-definition="A named kind of countable resource in placement, e.g. VCPU or MEMORY_MB. Custom classes (prefix CUSTOM_) let services invent their own — blazar creates one per reservation and puts inventory of it only on reserved hosts.">resource class</span> from placement. Together they are the entire enforcement mechanism.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">How blazar picked the hosts (not how you think)</h2>
+          <div class="step-cards stagger-children">
+            <div class="step-card animate-in"><div class="step-num">1</div><div class="step-body"><strong>Filter by properties</strong><p><code>query_available_hosts</code> filters blazar's own <code>computehosts</code> table by the request's <code>resource_properties</code> (extra capabilities like <code>warre_id</code>).</p><span class="src">instance_plugin.py:188-228</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">2</div><div class="step-body"><strong>Replay the calendar</strong><p>For every candidate host it walks all overlapping leases' events and computes the vcpu/memory/disk high-water mark — blazar does its own capacity math from its own DB, <em>not</em> from placement.</p><span class="src">instance_plugin.py:94-143 · max_usages()</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">3</div><div class="step-body"><strong>Pin or fail</strong><p>Each instance slot that fits becomes a <code>computehost_allocations</code> row. Not enough slots → <code>NotEnoughHostsAvailable</code> — which lands verbatim in warre's <code>status_reason</code>.</p><span class="src">instance_plugin.py:230-319 · pickup_hosts()</span></div></div>
+          </div>
+          <div class="callout callout-info">
+            <div class="callout-icon">🧠</div>
+            <div class="callout-content">
+              <span class="callout-title">Two plugins, two brains</span>
+              <p>warre uses <code>virtual:instance</code>, which reckons capacity from blazar's <code>computehosts</code> columns (vcpus/memory/disk only). The newer <code>flavor:instance</code> plugin instead schedules against a cached copy of each host's <em>placement inventory</em> (<code>computehost_resource_inventory</code>) and understands <code>resources:*</code> extra specs such as GPU resource classes — but not traits. If a host's cached inventory is stale, its candidate maths is silently wrong.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Verify the ground work</h2>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">Lease PENDING — these four things must already exist</span></div>
+            <div class="ops-check-body">
+              <span class="note"># 1. the private flavor (admin only — it is private, access list still empty)</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack flavor show $RSV_ID -c name -c properties</span><br>
+              <span class="out">name: reservation:$RSV_ID</span><br>
+              <span class="out">properties: <span class="hl">aggregate_instance_extra_specs:reservation</span>='$RSV_ID', <span class="hl">resources:CUSTOM_RESERVATION_…</span>='1'</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack flavor access list --flavor $RSV_ID</span><br>
+              <span class="out">(empty — access is granted at lease start)</span><br>
+              <br>
+              <span class="note"># 2. the aggregate — exists, has metadata, has NO hosts yet</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack aggregate show $RSV_ID</span><br>
+              <span class="out">hosts: []   properties: reservation='$RSV_ID', filter_tenant_id='…'</span><br>
+              <br>
+              <span class="note"># 3. the resource class</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource class list | grep CUSTOM_RESERVATION</span><br>
+              <br>
+              <span class="note"># 4. host pinning — blazar's allocations API (admin), or its DB</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack reservation allocation list host --reservation-id $RSV_ID</span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT compute_host_id FROM blazar.computehost_allocations WHERE reservation_id='$RSV_ID';</span>
+            </div>
+          </div>
+          <div class="quiz-container" id="quiz-m3">
+            <div class="quiz-question-block" data-correct="b"
+                 data-explanation-right="Hosts only join the aggregate when start_lease fires. An empty aggregate before the start time is the designed behaviour — the artefacts exist early, the keys come later."
+                 data-explanation-wrong="It is normal. Blazar creates the aggregate at lease-create time but only adds the reserved hosts when the start_lease event fires. Empty-before-start is by design.">
+              <div class="quiz-question">A user's lease starts tomorrow. You run <code>openstack aggregate show &lt;rsv-id&gt;</code> and see zero hosts. Is something broken?</div>
+              <div class="quiz-options">
+                <button class="quiz-option" data-value="a" onclick="selectOption(this)"><span class="quiz-option-radio"></span>Yes — the aggregate should have been populated at lease create</button>
+                <button class="quiz-option" data-value="b" onclick="selectOption(this)"><span class="quiz-option-radio"></span>No — hosts join only when start_lease fires</button>
+                <button class="quiz-option" data-value="c" onclick="selectOption(this)"><span class="quiz-option-radio"></span>No — instance reservations never put hosts in the aggregate; only physical:host does</button>
+              </div>
+              <div class="quiz-feedback"></div>
+            </div>
+            <button class="quiz-check-btn" onclick="checkQuiz('quiz-m3')">Check answer</button>
+            <button class="quiz-reset-btn" onclick="resetQuiz('quiz-m3')">Reset</button>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 4 — THE CLOCK FIRES ════════════ -->
+  <section class="module" id="module-4" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">04</span>
+        <h1 class="module-title">The clock fires: start_lease</h1>
+        <p class="module-subtitle">There is no cron job. blazar-manager polls its own <code>events</code> table every 10 seconds — a hard-coded constant — and executes whatever is due. Understanding this loop is understanding every "my lease didn't start" ticket.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The event poller — blazar's only heartbeat</h2>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">blazar/manager/service.py:229-236</span><br>
+events = db_api.<span class="code-function">event_get_all_sorted_by_filters</span>(<br>
+&nbsp;&nbsp;&nbsp;&nbsp;sort_key=<span class="code-string">'time'</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;sort_dir=<span class="code-string">'asc'</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;filters={<span class="code-string">'status'</span>: status.event.UNDONE,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">'time'</span>: {<span class="code-string">'op'</span>: <span class="code-string">'le'</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">'border'</span>: timeutils.<span class="code-function">utcnow</span>()}}<br>
+)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Every 10 seconds: fetch all UNDONE events whose time has passed, oldest first."</strong>
+              <p style="margin-top: var(--space-3);">Due events are batched by type in priority order <code>before_end_lease → end_lease → start_lease</code>, so back-to-back leases on the same hosts tear down before the next one starts. Each event is marked IN_PROGRESS and executed in a green thread.</p>
+            </div>
+          </div>
+          <div class="state-track">
+            <span class="state-pill task">event: UNDONE</span><span class="state-arrow">→</span>
+            <span class="state-pill vm">IN_PROGRESS</span><span class="state-arrow">→</span>
+            <span class="state-pill done">DONE</span>
+            <span class="state-arrow" style="margin-left: var(--space-3);">⤷</span>
+            <span class="state-pill err">ERROR</span>
+          </div>
+          <div class="callout callout-warning">
+            <div class="callout-icon">🕰️</div>
+            <div class="callout-content">
+              <span class="callout-title">Reading a stuck event</span>
+              <p><strong>UNDONE past its time</strong> → blazar-manager is not running (or the poller is wedged). <strong>IN_PROGRESS forever</strong> → the executor thread died mid-flight; the event will never be retried automatically. <strong>ERROR</strong> → the plugin action raised; check blazar-manager logs for the traceback.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">on_start: three keys are handed over</h2>
+          <p>The lease transitions PENDING → STARTING, and the plugin's <code>on_start</code> hands the project its keys: flavor access, aggregate membership, and — the real enforcement — placement inventory.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">blazar/plugins/instances/instance_plugin.py:615-620</span><br>
+<span class="code-keyword">for</span> host_id, num <span class="code-keyword">in</span> allocation_map.<span class="code-function">items</span>():<br>
+&nbsp;&nbsp;&nbsp;&nbsp;host = db_api.<span class="code-function">host_get</span>(host_id)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;pool.<span class="code-function">add_computehost</span>(instance_reservation[<span class="code-string">'aggregate_id'</span>],<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;host[<span class="code-string">'service_name'</span>], stay_in=<span class="code-keyword">True</span>)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">self</span>.placement_client.<span class="code-function">update_reservation_inventory</span>(<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;host[<span class="code-string">'hypervisor_hostname'</span>], reservation_id, num)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"For each pinned host: join the reservation aggregate, then publish seats to placement."</strong>
+              <p style="margin-top: var(--space-3);"><code>stay_in=True</code> means the host also <em>stays</em> in the <span class="term" data-definition="The nova host aggregate (default name 'freepool') where blazar keeps its reservable hypervisors. Blazar does not create it — the operator must. physical:host reservations move hosts out of it; instance reservations leave them in.">freepool</span> — instance reservations share hosts; whole-host reservations remove them.</p>
+              <p><code>update_reservation_inventory</code> lazily creates a child <span class="term" data-definition="Placement models hardware as a tree of resource providers. A compute node is the root; children (like blazar_&lt;host&gt;) hang beneath it and hold extra inventory. An instance's allocation can span the root and a child in one atomic claim.">resource provider</span> named <code>blazar_&lt;hypervisor&gt;</code> under the compute node, then sets inventory <code>CUSTOM_RESERVATION_&lt;ID&gt;: total=num, max_unit=1, allocation_ratio=1.0</code>.</p>
+            </div>
+          </div>
+          <p>Just before that loop, the project finally gets to see the flavor: <code>self.nova.flavor_access.add_tenant_access(reservation_id, ctx.project_id)</code> <span class="file-ref">instance_plugin.py:595-597</span>. Then the lease settles at ACTIVE, and blazar emits the notification <code>lease.event.start_lease</code>.</p>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The whisper back to warre</h2>
+          <div class="step-cards stagger-children">
+            <div class="step-card animate-in"><div class="step-num">1</div><div class="step-body"><strong>blazar emits</strong><p>Publisher <code>blazar.lease</code>, event_type <code>lease.event.start_lease</code>, payload: lease_id, user, project, dates.</p><span class="src">blazar/manager/service.py:837-842 · notifier.py</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">2</div><div class="step-body"><strong>The pipeline relays</strong><p>The site's telemetry pipeline forwards it as a ceilometer-style event onto exchange <code>ceilometer</code>, topic <code>warre</code> — where warre-notification listens.</p><span class="src">warre/notification/consumer.py:37-45</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">3</div><div class="step-body"><strong>warre reacts</strong><p>Looks up the reservation by the <code>lease_id</code> trait, sets <code>ACTIVE</code>, emits <code>warre.reservation.start</code>, emails the user.</p><span class="src">warre/notification/endpoints.py:85-104</span></div></div>
+          </div>
+          <div style="margin: var(--space-6) 0;">
+            <div class="state-lane"><span class="state-lane-label">warre</span><span class="state-pill vm">ALLOCATED</span><span class="state-arrow">→</span><span class="state-pill done">ACTIVE</span></div>
+            <div class="state-lane"><span class="state-lane-label">blazar lease</span><span class="state-pill vm">PENDING</span><span class="state-arrow">→</span><span class="state-pill task">STARTING</span><span class="state-arrow">→</span><span class="state-pill done">ACTIVE</span></div>
+            <div class="state-lane"><span class="state-lane-label">start_lease event</span><span class="state-pill task">UNDONE</span><span class="state-arrow">→</span><span class="state-pill task">IN_PROGRESS</span><span class="state-arrow">→</span><span class="state-pill done">DONE</span></div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">The moment a lease goes ACTIVE — five things flip at once</span></div>
+            <div class="ops-check-body">
+              <span class="prompt">$ </span><span class="cmd">openstack reservation lease show "Reservation $RID"</span><br>
+              <span class="out">status: <span class="hl">ACTIVE</span>   events: start_lease → <span class="hl">DONE</span></span><br>
+              <span class="note"># the alarm-clock rows themselves (what blazar-manager polls every 10 s)</span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT event_type, time, status FROM blazar.events WHERE lease_id='$LEASE_ID';</span><br>
+              <br>
+              <span class="prompt">$ </span><span class="cmd">openstack flavor access list --flavor $RSV_ID</span><br>
+              <span class="out">| $RSV_ID | <span class="hl">$PROJECT_ID</span> |   <span class="note"># project can now see the flavor</span></span><br>
+              <br>
+              <span class="prompt">$ </span><span class="cmd">openstack aggregate show $RSV_ID -c hosts</span><br>
+              <span class="out">hosts: ['qh2-rcc123', …]   <span class="note"># reserved hypervisors joined</span></span><br>
+              <br>
+              <span class="note"># the placement seats: child RP under each reserved compute node</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider list --name blazar_qh2-rcc123</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider inventory list $BLAZAR_RP_UUID</span><br>
+              <span class="out">| CUSTOM_RESERVATION_9F2A… | total=<span class="hl">4</span> | max_unit=1 | allocation_ratio=1.0 |</span><br>
+              <br>
+              <span class="note"># warre agrees (or the notification pipeline is broken)</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack warre reservation show $RID -c status</span>  <span class="out">→ <span class="hl">ACTIVE</span></span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT status FROM warre.reservation WHERE id='$RID';  <span class="out">→ ACTIVE</span></span>
+            </div>
+          </div>
+          <div class="callout callout-warning">
+            <div class="callout-icon">📡</div>
+            <div class="callout-content">
+              <span class="callout-title">blazar ACTIVE but warre still ALLOCATED?</span>
+              <p>The lease started but the notification never arrived: check blazar's notification transport, the telemetry relay onto exchange <code>ceilometer</code> / topic <code>warre</code>, and the warre-notification daemon. The safety net is warre-worker's 30-minute periodic, which only fixes the <em>end</em> case ("has ended but still active" warning) — there is no equivalent for a missed start. The user never gets their "your reservation is ready" email.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 5 — BOOTING RESERVED ════════════ -->
+  <section class="module" id="module-5" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">05</span>
+        <h1 class="module-title">Booting: two extra specs steer nova</h1>
+        <p class="module-subtitle">The user runs <code>openstack server create --flavor &lt;rsv-id&gt;</code>. From here on it is a completely ordinary nova boot — except the flavor's two extra specs quietly bend scheduling toward the reserved hosts.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Spec one goes to placement</h2>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">nova/scheduler/utils.py:53-58</span><br>
+<span class="code-comment"># extra_specs-specific consts</span><br>
+XS_RES_PREFIX = <span class="code-string">'resources'</span><br>
+XS_TRAIT_PREFIX = <span class="code-string">'trait'</span><br>
+<span class="code-comment"># Regex patterns for suffixed or unsuffixed resources/trait keys</span><br>
+XS_KEYPAT = re.<span class="code-function">compile</span>(<span class="code-string">r"^(%s)([a-zA-Z0-9_-]{1,64})?:(.*)$"</span> %<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">'|'</span>.<span class="code-function">join</span>((XS_RES_PREFIX, XS_TRAIT_PREFIX)))
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Any extra spec starting with <code>resources:</code> or <code>trait:</code> becomes part of the placement query."</strong>
+              <p style="margin-top: var(--space-3);">So <code>resources:CUSTOM_RESERVATION_…=1</code> joins VCPU/MEMORY_MB/DISK_GB in the request: <code>GET /allocation_candidates?resources=CUSTOM_RESERVATION_…:1,DISK_GB:30,MEMORY_MB:…,VCPU:…</code></p>
+              <p>Note what <em>doesn't</em> match: <code>aggregate_instance_extra_specs:…</code> never reaches placement. It is handled later, by a host filter.</p>
+            </div>
+          </div>
+          <p>Only hosts whose <code>blazar_&lt;host&gt;</code> child provider carries that inventory can answer. The allocation that comes back — and is claimed with <code>PUT /allocations/&lt;instance&gt;</code> — spans <em>two</em> providers:</p>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">A reserved instance's allocation spans root + child RP</span></div>
+            <div class="ops-check-body">
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider allocation show $INSTANCE_UUID</span><br>
+              <span class="out">| $ROOT_RP (compute node)  | {'VCPU': 4, 'MEMORY_MB': 16384, 'DISK_GB': 30} |</span><br>
+              <span class="out">| $CHILD_RP (blazar_qh2-…) | {'<span class="hl">CUSTOM_RESERVATION_9F2A…</span>': 1}              |</span><br>
+              <br>
+              <span class="note"># dry-run scheduling: would placement even return candidates?</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack allocation candidate list --resource CUSTOM_RESERVATION_9F2A…=1</span><br>
+              <br>
+              <span class="note"># seats taken vs total (total=amount, max_unit=1 caps concurrency)</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider usage show $CHILD_RP</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Spec two is checked by a filter</h2>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">nova/scheduler/filters/aggregate_instance_extra_specs.py:61-67</span><br>
+aggregate_vals = metadata.<span class="code-function">get</span>(key, <span class="code-keyword">None</span>)<br>
+<span class="code-keyword">if not</span> aggregate_vals:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;LOG.<span class="code-function">debug</span>(<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">"%(host_state)s fails flavor extra_specs requirements. "</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">"Extra_spec %(key)s is not in aggregate."</span>,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{<span class="code-string">'host_state'</span>: host_state, <span class="code-string">'key'</span>: key})<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">return</span> <span class="code-keyword">False</span>
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Reject any host whose aggregates lack the metadata the flavor demands."</strong>
+              <p style="margin-top: var(--space-3);"><code>AggregateInstanceExtraSpecsFilter</code> matches the flavor's <code>aggregate_instance_extra_specs:reservation=&lt;id&gt;</code> against the reservation aggregate's <code>reservation=&lt;id&gt;</code> metadata from module 3.</p>
+              <p><strong>Config gotcha:</strong> this filter is <em>not</em> in nova's default <code>enabled_filters</code>. If it is missing from <code>nova.conf</code>, the aggregate half of the confinement silently does nothing — placement inventory becomes the only fence.</p>
+            </div>
+          </div>
+          <div class="callout callout-accent">
+            <div class="callout-icon">🔦</div>
+            <div class="callout-content">
+              <span class="callout-title">Nectar superpower: filters log at INFO</span>
+              <p>The <code>nectar/2024.1</code> branch carries a Nectarism ("Add more host info in scheduler log", <span class="file-ref">nova/filters.py:86-104</span>) that logs each filter's <em>surviving host list</em> at INFO — upstream only logs counts at DEBUG. In nova-scheduler logs you can literally watch <code>Filter AggregateInstanceExtraSpecsFilter returned 2 hosts [...]</code> for the instance UUID and see exactly where a reserved boot lost its hosts.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Triage: three failures, three fingerprints</h2>
+          <div class="step-cards stagger-children">
+            <div class="step-card animate-in"><div class="step-num">A</div><div class="step-body"><strong>HTTP 400 at the API — lease not started</strong><p>The flavor is private and access is only granted at start_lease. Before that, nova-api answers <code>400</code> (FlavorNotFound); <em>no instance record, nothing in scheduler logs</em>.</p><span class="src">nova/objects/flavor.py:279-284 · api 400 mapping</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">B</div><div class="step-body"><strong>"Got no allocation candidates" — placement said no</strong><p>Inventory missing (start never ran?) or all seats taken. The tell: NoValidHost with <em>no filter lines at all</em> in the scheduler log — it never reached filtering.</p><span class="src">nova/scheduler/manager.py:237-243</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">C</div><div class="step-body"><strong>Filter run ends at 0 hosts — aggregate mismatch</strong><p>Placement returned candidates but <code>AggregateInstanceExtraSpecsFilter</code> rejected them: aggregate metadata missing or hosts never joined. The Nectar INFO logs show which filter zeroed the list.</p><span class="src">nova/filters.py:124-128 · 'Filtering removed all hosts'</span></div></div>
+          </div>
+          <div class="quiz-container" id="quiz-m5">
+            <div class="quiz-question-block" data-correct="c"
+                 data-explanation-right="No filter lines means the scheduler never got candidates from placement — the CUSTOM_RESERVATION inventory is missing or exhausted. Check the child RP's inventory and usage before touching the filters."
+                 data-explanation-wrong="The absence of ANY filter log lines is the fingerprint of placement returning zero candidates — the request died before filtering. Aggregate/filter problems (a, b) always show a filter run in the log first.">
+              <div class="quiz-question">A reserved boot fails with NoValidHost. The scheduler log shows <code>Got no allocation candidates from the Placement API</code> and <em>no filter lines at all</em>. Where do you look first?</div>
+              <div class="quiz-options">
+                <button class="quiz-option" data-value="a" onclick="selectOption(this)"><span class="quiz-option-radio"></span>The aggregate metadata — probably missing reservation=&lt;id&gt;</button>
+                <button class="quiz-option" data-value="b" onclick="selectOption(this)"><span class="quiz-option-radio"></span>nova.conf enabled_filters — AggregateInstanceExtraSpecsFilter is missing</button>
+                <button class="quiz-option" data-value="c" onclick="selectOption(this)"><span class="quiz-option-radio"></span>The blazar child RP — is CUSTOM_RESERVATION inventory there, and is it full?</button>
+              </div>
+              <div class="quiz-feedback"></div>
+            </div>
+            <button class="quiz-check-btn" onclick="checkQuiz('quiz-m5')">Check answer</button>
+            <button class="quiz-reset-btn" onclick="resetQuiz('quiz-m5')">Reset</button>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 6 — THE END ════════════ -->
+  <section class="module" id="module-6" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">06</span>
+        <h1 class="module-title">The end: teardown is not gentle</h1>
+        <p class="module-subtitle">Sixty minutes before the end, <code>before_end_lease</code> fires — for instance reservations it changes nothing, it only triggers warre's warning email. Then <code>end_lease</code> arrives, and it means it.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">end_lease, step by step</h2>
+          <div class="step-cards stagger-children">
+            <div class="step-card animate-in"><div class="step-num">1</div><div class="step-body"><strong>Revoke flavor access</strong><p>No new instances can be created with the reservation flavor.</p><span class="src">instance_plugin.py:627-631</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">2</div><div class="step-body"><strong>Drop the host pinning</strong><p><code>computehost_allocations</code> rows destroyed.</p><span class="src">instance_plugin.py:633-639</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">3</div><div class="step-body"><strong>Delete every instance on the flavor — all tenants</strong><p>See the code below. This is the step users must be warned about.</p><span class="src">instance_plugin.py:641-651</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">4</div><div class="step-body"><strong>Wait for nova to finish</strong><p>Polls every 5 s, up to 10 minutes. Timeout → <code>ServerDeletionTimeout</code> → lease ERROR, teardown incomplete.</p><span class="src">instance_plugin.py:653-658, 670-679</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">5</div><div class="step-body"><strong>Delete flavor, aggregate, server group</strong><p><code>cleanup_resources()</code> — the aggregate delete moves any hosts back toward the freepool first.</p><span class="src">instance_plugin.py:383-397 · nova.py:288-320</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">6</div><div class="step-body"><strong>Wipe placement</strong><p>Inventory removed from each <code>blazar_&lt;host&gt;</code>, then the resource class deleted. The child RP itself survives — it belongs to the host, not the lease.</p><span class="src">instance_plugin.py:662-668</span></div></div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The sharp edge, verbatim</h2>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">blazar/plugins/instances/instance_plugin.py:641-651</span><br>
+<span class="code-keyword">for</span> server <span class="code-keyword">in</span> <span class="code-keyword">self</span>.nova.servers.<span class="code-function">list</span>(search_opts={<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">'flavor'</span>: reservation_id,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">'all_tenants'</span>: <span class="code-number">1</span>}, detailed=<span class="code-keyword">False</span>):<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">try</span>:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">self</span>.nova.servers.<span class="code-function">delete</span>(server=server)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">except</span> nova_exceptions.NotFound:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;LOG.<span class="code-function">info</span>(<span class="code-string">"Could not find server '%s', may have been deleted "</span><br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">"concurrently."</span>, server.id)<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">except</span> Exception <span class="code-keyword">as</span> e:<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;LOG.<span class="code-function">exception</span>(<span class="code-string">"Failed to delete server '%s': %s."</span>, server.id,<br>
+&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">str</span>(e))
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Find every server booted with this flavor, in every project, and delete it."</strong>
+              <p style="margin-top: var(--space-3);">Not shelved. Not stopped. <em>Deleted.</em> This is why warre's before_end email says instances "will be DELETED" — and why researchers must snapshot or copy results off before the lease ends.</p>
+            </div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">Post-mortem of a finished lease — everything should be gone</span></div>
+            <div class="ops-check-body">
+              <span class="prompt">$ </span><span class="cmd">openstack reservation lease show "Reservation $RID"</span>  <span class="out">→ status: <span class="hl">TERMINATED</span>, end_lease: DONE</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack flavor show $RSV_ID</span>                     <span class="out">→ No flavor with a name or ID … (404 ✓)</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack aggregate list | grep $RSV_ID</span>           <span class="out">→ (empty ✓)</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource class list | grep 9F2A</span>         <span class="out">→ (empty ✓)</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack server list --all-projects --flavor $RSV_ID</span> <span class="out">→ (empty ✓)</span><br>
+              <span class="note"># the child RP blazar_&lt;host&gt; still exists — that is normal; it is per-host, not per-lease</span><br>
+              <br>
+              <span class="note"># warre: COMPLETE now, row auto-purged 7 days after end</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack warre reservation show $RID -c status</span>  <span class="out">→ <span class="hl">COMPLETE</span></span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT status FROM warre.reservation WHERE id='$RID';  <span class="out">→ COMPLETE</span></span>
+            </div>
+          </div>
+          <div class="callout callout-warning">
+            <div class="callout-icon">⏳</div>
+            <div class="callout-content">
+              <span class="callout-title">When teardown wedges</span>
+              <p>If nova cannot delete an instance within 10 minutes (host down, deletion stuck in <code>deleting</code>), blazar raises <code>ServerDeletionTimeout</code>: the lease lands in ERROR with teardown half-done — flavor and aggregate possibly still present, inventory still in placement. Fix the stuck instance, then delete the lease (<code>openstack reservation lease delete</code> re-runs <code>on_end</code> for reservations not yet deleted).</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The full journey, animated</h2>
+          <p>Twenty-one steps, four services, one booking. Watch where the packet leaves one project and enters the next — every hop is a place where things can silently stall.</p>
+          <div class="flow-animation" id="lifecycle-flow" data-steps='[
+            {"highlight":"user","label":"1. The researcher books: POST /v1/reservations {flavor_id, start, end, instance_count} to warre-api."},
+            {"from":"user","to":"wapi","packet":true,"highlight":"wapi","label":"2. warre-api: keystone auth, oslo.limit quota (reservation + hours), business rules, sweep-line capacity check."},
+            {"highlight":"wapi","label":"3. Row committed: status=PENDING_CREATE. Quota and the calendar slot are consumed from this moment."},
+            {"from":"wapi","to":"wwkr","packet":true,"highlight":"wwkr","label":"4. warre-api CASTS create_lease on topic warre-worker (fire-and-forget) and returns to the user."},
+            {"highlight":"wwkr","label":"5. warre-worker grants the bot user a role in the project and builds a project-scoped session."},
+            {"from":"wwkr","to":"bapi","packet":true,"highlight":"bapi","label":"6. Bot calls blazar: POST /v1/leases — one virtual:instance reservation (amount, vcpus, memory, disk, resource_properties)."},
+            {"from":"bapi","to":"bmgr","packet":true,"highlight":"bmgr","label":"7. blazar-api creates a keystone trust, then RPC-CALLS create_lease on blazar-manager (blocking)."},
+            {"highlight":"bmgr","label":"8. Lease CREATING: candidate hosts picked from blazar&apos;s own calendar math; rows written: lease, reservation (pending), 3 events (UNDONE)."},
+            {"from":"bmgr","to":"nova","packet":true,"highlight":"nova","label":"9. Plugin creates the private flavor reservation:&lt;id&gt; (two extra specs) and the empty aggregate &lt;id&gt;."},
+            {"from":"bmgr","to":"plmt","packet":true,"highlight":"plmt","label":"10. POST /resource_classes → CUSTOM_RESERVATION_&lt;ID&gt;. Lease settles at PENDING."},
+            {"from":"bapi","to":"wwkr","packet":true,"highlight":"wwkr","label":"11. Reply flows back: warre stores lease_id + compute_flavor, sets ALLOCATED, sends the create email."},
+            {"highlight":"bmgr","label":"12. …time passes. Every 10 seconds blazar-manager polls the events table for due UNDONE events."},
+            {"highlight":"bmgr","label":"13. Start time reached: start_lease → IN_PROGRESS. Lease PENDING → STARTING."},
+            {"from":"bmgr","to":"nova","packet":true,"highlight":"nova","label":"14. on_start: flavor access granted to the project; reserved hosts join the aggregate (stay_in=True)."},
+            {"from":"bmgr","to":"plmt","packet":true,"highlight":"plmt","label":"15. Child RP blazar_&lt;host&gt; gets inventory CUSTOM_RESERVATION_&lt;ID&gt;: total=N, max_unit=1. Lease ACTIVE, event DONE."},
+            {"from":"bmgr","to":"wntf","packet":true,"highlight":"wntf","label":"16. Notification lease.event.start_lease → warre-notification sets ACTIVE, emails the user."},
+            {"from":"user","to":"nova","packet":true,"highlight":"nova","label":"17. The user boots: openstack server create --flavor &lt;rsv-id&gt;. The two extra specs steer scheduling."},
+            {"from":"nova","to":"plmt","packet":true,"highlight":"plmt","label":"18. GET /allocation_candidates includes CUSTOM_RESERVATION_&lt;ID&gt;:1 — only reserved hosts answer. Claim spans root + child RP."},
+            {"highlight":"bmgr","label":"19. End minus 60 min: before_end_lease fires → warre emails a warning. No status change."},
+            {"from":"bmgr","to":"nova","packet":true,"highlight":"nova","label":"20. end_lease: access revoked, ALL servers on the flavor deleted (all tenants), wait up to 10 min, flavor + aggregate deleted."},
+            {"from":"bmgr","to":"wntf","packet":true,"highlight":"wntf","label":"21. Inventory + resource class wiped; lease TERMINATED. lease.event.end_lease → warre COMPLETE + end email. 🎬"}
+          ]'>
+            <div class="flow-actors">
+              <div class="flow-actor active" id="flow-user"><div class="flow-actor-icon">👩‍🔬</div><span>user</span></div>
+              <div class="flow-actor" id="flow-wapi"><div class="flow-actor-icon">WA</div><span>warre-api</span></div>
+              <div class="flow-actor" id="flow-wwkr"><div class="flow-actor-icon">WW</div><span>warre-worker</span></div>
+              <div class="flow-actor" id="flow-wntf"><div class="flow-actor-icon">WN</div><span>warre-notif</span></div>
+              <div class="flow-actor" id="flow-bapi"><div class="flow-actor-icon">BA</div><span>blazar-api</span></div>
+              <div class="flow-actor" id="flow-bmgr"><div class="flow-actor-icon">BM</div><span>blazar-mgr</span></div>
+              <div class="flow-actor" id="flow-nova"><div class="flow-actor-icon">NV</div><span>nova</span></div>
+              <div class="flow-actor" id="flow-plmt"><div class="flow-actor-icon">PL</div><span>placement</span></div>
+            </div>
+            <div class="flow-packet"></div>
+            <div class="flow-step-label">Click "Next step" to begin the journey</div>
+            <div class="flow-controls">
+              <button class="btn btn-primary flow-next-btn">Next step →</button>
+              <button class="btn flow-reset-btn">Reset</button>
+              <span class="flow-progress">Step 0 / 21</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 7 — TROUBLESHOOTING PLAYBOOK ════════════ -->
+  <section class="module" id="module-7" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">07</span>
+        <h1 class="module-title">The troubleshooting playbook</h1>
+        <p class="module-subtitle">Six symptoms cover almost every reservation ticket. For each: the fingerprint, and the first place to look.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Symptom → first look</h2>
+          <div class="pattern-cards stagger-children">
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">🧊</div>
+              <div class="pattern-title">Frozen at PENDING_CREATE</div>
+              <p class="pattern-desc">The cast to <code>warre-worker</code> was never consumed. Check the worker service and RabbitMQ. <strong>Nothing retries this</strong> — and the row keeps blocking quota and the calendar slot until deleted.</p>
+            </div>
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">💥</div>
+              <div class="pattern-title">warre ERROR</div>
+              <p class="pattern-desc">Read <code>status_reason</code> — it is the blazar exception verbatim. <code>NotEnoughHostsAvailable</code> → blazar host capacity; keystone auth errors → the bot user's credentials or role grants.</p>
+            </div>
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">🕰️</div>
+              <div class="pattern-title">Lease didn't start on time</div>
+              <p class="pattern-desc"><code>lease show</code> → look at the events. <code>UNDONE</code> past its time → blazar-manager down. <code>IN_PROGRESS</code> forever → executor thread died. <code>ERROR</code> → plugin raised; read blazar-manager logs.</p>
+            </div>
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">📡</div>
+              <div class="pattern-title">blazar and warre disagree</div>
+              <p class="pattern-desc">Lease ACTIVE/TERMINATED but warre still ALLOCATED/ACTIVE → the notification relay (blazar → exchange <code>ceilometer</code>, topic <code>warre</code> → warre-notification) is broken. Watch for warre-worker's "has ended but still active" warnings.</p>
+            </div>
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">🤕</div>
+              <div class="pattern-title">Lease degraded: True</div>
+              <p class="pattern-desc">A reserved host failed. Blazar marked it <code>reservable=0</code>, tried to heal onto a replacement, and set reservation flags <code>missing_resources</code> / <code>resources_changed</code>. All three surface in <code>lease show</code>.</p>
+            </div>
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">🧟</div>
+              <div class="pattern-title">Orphans</div>
+              <p class="pattern-desc">warre-worker crashed after creating the lease but before committing → a lease warre doesn't know about (warre-notification logs "unknown lease" warnings). Failed teardown → leftover flavor/aggregate/inventory. Compare warre rows against <code>lease list</code> per project.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Where the truth lives</h2>
+          <p>When two layers disagree, this is the pecking order of evidence — each layer only knows about its own objects.</p>
+          <div class="arch-diagram">
+            <div class="arch-zone">
+              <div class="arch-zone-label">warre DB — the booking</div>
+              <div class="arch-row" style="font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-text-secondary);">reservation (status · status_reason · lease_id · compute_flavor) &nbsp;·&nbsp; flavor &nbsp;·&nbsp; flavor_project &nbsp;·&nbsp; maintenance_window</div>
+            </div>
+            <div class="arch-zone">
+              <div class="arch-zone-label">blazar DB — the schedule &amp; the pinning</div>
+              <div class="arch-row" style="font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-text-secondary);">leases (status · degraded · trust_id) &nbsp;·&nbsp; reservations (status · flags) &nbsp;·&nbsp; <strong>events (the alarm clocks)</strong> &nbsp;·&nbsp; computehost_allocations (host pinning) &nbsp;·&nbsp; computehosts (reservable) &nbsp;·&nbsp; instance_reservations (flavor_id · aggregate_id)</div>
+            </div>
+            <div class="arch-zone">
+              <div class="arch-zone-label">nova — the consumables</div>
+              <div class="arch-row" style="font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-text-secondary);">private flavor reservation:&lt;id&gt; (extra specs · access list) &nbsp;·&nbsp; aggregate &lt;id&gt; (metadata · hosts) &nbsp;·&nbsp; the instances</div>
+            </div>
+            <div class="arch-zone" style="margin-bottom: 0;">
+              <div class="arch-zone-label">placement — the enforcement</div>
+              <div class="arch-row" style="font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-text-secondary);">resource class CUSTOM_RESERVATION_&lt;ID&gt; &nbsp;·&nbsp; child RP blazar_&lt;host&gt; (inventory · usage) &nbsp;·&nbsp; instance allocations (root + child)</div>
+            </div>
+          </div>
+          <div class="callout callout-accent">
+            <div class="callout-icon">🧭</div>
+            <div class="callout-content">
+              <span class="callout-title">The 60-second health check</span>
+              <p>For any reservation ticket, walk the chain in order: <strong>warre status</strong> → <strong>lease status + events</strong> → <strong>flavor + access</strong> → <strong>aggregate hosts + metadata</strong> → <strong>child RP inventory + usage</strong>. The first mismatch between two adjacent layers is where the fault lives.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Scenario quiz</h2>
+          <div class="quiz-container" id="quiz-final">
+            <div class="quiz-question-block" data-correct="b"
+                 data-explanation-right="TERMINATED in blazar plus ACTIVE in warre means blazar finished its side but the end notification never reached warre. The instances are already gone — fix the relay (and warre's periodic will eventually flip the row COMPLETE)."
+                 data-explanation-wrong="Look at the two statuses together: blazar says TERMINATED (end_lease ran — poller fine, teardown done), warre says ACTIVE (it never heard). Only the notification path between them explains that split.">
+              <div class="quiz-question">warre shows a reservation ACTIVE two hours past its end. <code>openstack reservation lease show</code> says TERMINATED. warre-worker logs repeat <em>"has ended but still active, marking as COMPLETE"</em>. What actually broke?</div>
+              <div class="quiz-options">
+                <button class="quiz-option" data-value="a" onclick="selectOption(this)"><span class="quiz-option-radio"></span>blazar-manager's event poller stopped — end_lease never ran</button>
+                <button class="quiz-option" data-value="b" onclick="selectOption(this)"><span class="quiz-option-radio"></span>The notification relay from blazar to warre — the end event was lost</button>
+                <button class="quiz-option" data-value="c" onclick="selectOption(this)"><span class="quiz-option-radio"></span>warre-api is down, so the status cannot be updated</button>
+              </div>
+              <div class="quiz-feedback"></div>
+            </div>
+
+            <div class="quiz-question-block" data-correct="c"
+                 data-explanation-right="Access is granted by on_start. A 400 at five past start means start_lease hasn't completed — check the event status in lease show before anything else. UNDONE → manager down; ERROR → read the manager logs."
+                 data-explanation-wrong="A private-flavor 400 at boot time means the project has no access yet — and access is granted exactly once, by on_start. So the question is whether start_lease actually ran: lease show, look at the event. Placement and the scheduler were never reached.">
+              <div class="quiz-question">A lease started at 09:00. At 09:05 the user gets HTTP 400 "flavor not found" on <code>server create</code>. Fastest next step?</div>
+              <div class="quiz-options">
+                <button class="quiz-option" data-value="a" onclick="selectOption(this)"><span class="quiz-option-radio"></span>Check the blazar child RP's inventory in placement</button>
+                <button class="quiz-option" data-value="b" onclick="selectOption(this)"><span class="quiz-option-radio"></span>Grep nova-scheduler logs for the filter run</button>
+                <button class="quiz-option" data-value="c" onclick="selectOption(this)"><span class="quiz-option-radio"></span><code>openstack reservation lease show</code> — is start_lease DONE?</button>
+              </div>
+              <div class="quiz-feedback"></div>
+            </div>
+
+            <div class="quiz-question-block" data-correct="a"
+                 data-explanation-right="PENDING_CREATE, ALLOCATED and ACTIVE all hold slots. A booking stuck in PENDING_CREATE (worker was down that day) silently eats capacity — ERROR and COMPLETE rows never do."
+                 data-explanation-wrong="The capacity check counts PENDING_CREATE, ALLOCATED and ACTIVE rows — so a stuck PENDING_CREATE consumes a slot even though it never became a lease. ERROR and COMPLETE rows are ignored by the sweep, and blazar capacity was never consulted for warre's own calendar.">
+              <div class="quiz-question">Users get "No capacity" for a flavor whose calendar looks empty — no ACTIVE or ALLOCATED reservations overlap the window. What is the likely culprit?</div>
+              <div class="quiz-options">
+                <button class="quiz-option" data-value="a" onclick="selectOption(this)"><span class="quiz-option-radio"></span>A reservation stuck in PENDING_CREATE still occupies the slots</button>
+                <button class="quiz-option" data-value="b" onclick="selectOption(this)"><span class="quiz-option-radio"></span>Old ERROR reservations are still counted against capacity</button>
+                <button class="quiz-option" data-value="c" onclick="selectOption(this)"><span class="quiz-option-radio"></span>Blazar's freepool ran out of hosts, so warre refuses new bookings</button>
+              </div>
+              <div class="quiz-feedback"></div>
+            </div>
+
+            <button class="quiz-check-btn" onclick="checkQuiz('quiz-final')">Check answers</button>
+            <button class="quiz-reset-btn" onclick="resetQuiz('quiz-final')">Reset</button>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Match the question to the command</h2>
+          <p>Drag each command onto the question it answers.</p>
+          <div class="dnd-container" id="match-cli">
+            <div class="dnd-chips">
+              <div class="dnd-chip" draggable="true" data-answer="lease">reservation lease show</div>
+              <div class="dnd-chip" draggable="true" data-answer="access">flavor access list</div>
+              <div class="dnd-chip" draggable="true" data-answer="inv">resource provider inventory list</div>
+              <div class="dnd-chip" draggable="true" data-answer="agg">aggregate show</div>
+              <div class="dnd-chip" draggable="true" data-answer="db">warre DB / API</div>
+            </div>
+            <div class="dnd-zones">
+              <div class="dnd-zone" data-correct="lease"><div class="dnd-zone-label">Did the start/end alarm clocks actually fire, and is the lease degraded?</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="access"><div class="dnd-zone-label">Can the project boot with the reservation flavor right now?</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="inv"><div class="dnd-zone-label">How many reserved seats exist on this hypervisor, and with what max_unit?</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="agg"><div class="dnd-zone-label">Which hypervisors currently back the reservation, and is the metadata right?</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="db"><div class="dnd-zone-label">Why did the booking fail — and which lease and nova flavor does it map to?</div><div class="dnd-zone-target">Drop here</div></div>
+            </div>
+            <div style="margin-top: var(--space-6);">
+              <button class="btn btn-primary" onclick="checkDnD('match-cli')">Check matches</button>
+              <button class="btn" onclick="resetDnD('match-cli')">Reset</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <div class="callout callout-success">
+            <div class="callout-icon">🎓</div>
+            <div class="callout-content">
+              <span class="callout-title">You can now trace a reservation end to end</span>
+              <p>warre books the slot and holds the quota; blazar schedules events and fences capacity; nova and placement enforce it with a private flavor, an aggregate, and a custom resource class on a child provider. Every hand-off has a CLI check — and the first mismatch between layers is always your fault line.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <div class="footer">
+    Traced from warre @ <code>master</code>, blazar @ <code>2025.1</code> and nova @ <code>nectar/2024.1</code>. Code snippets are exact excerpts. Built in the codebase-to-course visual style.
+  </div>
+
+  </main>
+
+  <script>
+  (function () {
+    'use strict';
+    function $(sel, ctx) { return (ctx || document).querySelector(sel); }
+    function $$(sel, ctx) { return Array.from((ctx || document).querySelectorAll(sel)); }
+
+    /* ── NAV & PROGRESS ── */
+    const progressBar = $('#progress-bar');
+    const navDots = $$('.nav-dot');
+    const modules = $$('.module');
+
+    function updateProgress() {
+      if (!progressBar) return;
+      const scrollTop = window.scrollY;
+      const scrollHeight = document.documentElement.scrollHeight - window.innerHeight;
+      const pct = scrollHeight > 0 ? (scrollTop / scrollHeight) * 100 : 0;
+      progressBar.style.width = pct + '%';
+      progressBar.setAttribute('aria-valuenow', Math.round(pct));
+      updateNavDots();
+    }
+    function updateNavDots() {
+      const scrollMid = window.scrollY + window.innerHeight / 2;
+      modules.forEach((mod, i) => {
+        const dot = navDots[i];
+        if (!dot) return;
+        const top = mod.offsetTop;
+        const bottom = top + mod.offsetHeight;
+        if (scrollMid >= top && scrollMid < bottom) { dot.classList.add('active'); dot.classList.remove('visited'); }
+        else if (window.scrollY + window.innerHeight > top) { dot.classList.remove('active'); dot.classList.add('visited'); }
+        else { dot.classList.remove('active', 'visited'); }
+      });
+    }
+    window.addEventListener('scroll', () => requestAnimationFrame(updateProgress), { passive: true });
+    updateProgress();
+    navDots.forEach(dot => dot.addEventListener('click', () => {
+      const target = $('#' + dot.dataset.target);
+      if (target) target.scrollIntoView({ behavior: 'smooth' });
+    }));
+
+    /* ── KEYBOARD NAV ── */
+    function currentModuleIndex() {
+      const scrollMid = window.scrollY + window.innerHeight / 2;
+      for (let i = 0; i < modules.length; i++) {
+        const top = modules[i].offsetTop, bottom = top + modules[i].offsetHeight;
+        if (scrollMid >= top && scrollMid < bottom) return i;
+      }
+      return 0;
+    }
+    document.addEventListener('keydown', e => {
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { const n = modules[currentModuleIndex() + 1]; if (n) { n.scrollIntoView({ behavior: 'smooth' }); e.preventDefault(); } }
+      if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { const p = modules[currentModuleIndex() - 1]; if (p) { p.scrollIntoView({ behavior: 'smooth' }); e.preventDefault(); } }
+    });
+
+    /* ── REVEAL ── */
+    const revealObserver = new IntersectionObserver(entries => {
+      entries.forEach(entry => { if (entry.isIntersecting) { entry.target.classList.add('visible'); revealObserver.unobserve(entry.target); } });
+    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.08 });
+    $$('.animate-in').forEach(el => revealObserver.observe(el));
+    $$('.stagger-children').forEach(parent => Array.from(parent.children).forEach((child, i) => child.style.setProperty('--stagger-index', i)));
+
+    /* ── GLOSSARY ── */
+    let activeTooltip = null;
+    function positionTooltip(term, tip) {
+      const rect = term.getBoundingClientRect();
+      const tipWidth = Math.min(320, Math.max(200, window.innerWidth * 0.8));
+      let left = rect.left + rect.width / 2 - tipWidth / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - tipWidth - 8));
+      tip.style.left = left + 'px'; tip.style.width = tipWidth + 'px';
+      document.body.appendChild(tip);
+      const tipHeight = tip.offsetHeight;
+      if (rect.top - tipHeight - 12 < 0) { tip.style.top = (rect.bottom + 8) + 'px'; tip.classList.add('flip'); }
+      else { tip.style.top = (rect.top - tipHeight - 8) + 'px'; tip.classList.remove('flip'); }
+    }
+    function showTooltip(term, tip) {
+      if (activeTooltip && activeTooltip !== tip) { activeTooltip.classList.remove('visible'); activeTooltip.remove(); }
+      positionTooltip(term, tip);
+      requestAnimationFrame(() => tip.classList.add('visible'));
+      activeTooltip = tip;
+    }
+    function hideTooltip(tip) {
+      tip.classList.remove('visible');
+      setTimeout(() => { if (!tip.classList.contains('visible')) tip.remove(); }, 150);
+      if (activeTooltip === tip) activeTooltip = null;
+    }
+    $$('.term').forEach(term => {
+      const tip = document.createElement('span');
+      tip.className = 'term-tooltip';
+      tip.textContent = term.dataset.definition;
+      term.addEventListener('mouseenter', () => showTooltip(term, tip));
+      term.addEventListener('mouseleave', () => hideTooltip(tip));
+      term.addEventListener('click', e => { e.stopPropagation(); tip.classList.contains('visible') ? hideTooltip(tip) : showTooltip(term, tip); });
+    });
+    document.addEventListener('click', () => { if (activeTooltip) { activeTooltip.classList.remove('visible'); activeTooltip.remove(); activeTooltip = null; } });
+
+    /* ── QUIZ ── */
+    window.selectOption = function (btn) {
+      const block = btn.closest('.quiz-question-block');
+      $$('.quiz-option', block).forEach(o => o.classList.remove('selected'));
+      btn.classList.add('selected');
+    };
+    window.checkQuiz = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.quiz-question-block', container).forEach(q => {
+        const selected = $('.quiz-option.selected', q);
+        const feedback = $('.quiz-feedback', q);
+        const correct = q.dataset.correct;
+        const rightExp = q.dataset.explanationRight || '';
+        const wrongExp = q.dataset.explanationWrong || '';
+        if (!selected) { feedback.textContent = 'Pick an answer first!'; feedback.className = 'quiz-feedback show warning'; return; }
+        $$('.quiz-option', q).forEach(o => o.disabled = true);
+        if (selected.dataset.value === correct) {
+          selected.classList.add('correct');
+          feedback.innerHTML = '<strong>Exactly!</strong> ' + rightExp;
+          feedback.className = 'quiz-feedback show success';
+        } else {
+          selected.classList.add('incorrect');
+          const correctBtn = $('.quiz-option[data-value="' + correct + '"]', q);
+          if (correctBtn) correctBtn.classList.add('correct');
+          feedback.innerHTML = '<strong>Not quite.</strong> ' + wrongExp;
+          feedback.className = 'quiz-feedback show error';
+        }
+      });
+    };
+    window.resetQuiz = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.quiz-option', container).forEach(o => { o.classList.remove('selected', 'correct', 'incorrect'); o.disabled = false; });
+      $$('.quiz-feedback', container).forEach(f => { f.className = 'quiz-feedback'; f.textContent = ''; });
+    };
+
+    /* ── DND ── */
+    function initDnD(containerEl) {
+      if (!containerEl) return;
+      const chips = $$('.dnd-chip', containerEl);
+      const zones = $$('.dnd-zone', containerEl);
+      chips.forEach(chip => {
+        chip.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', chip.dataset.answer); chip.classList.add('dragging'); });
+        chip.addEventListener('dragend', () => chip.classList.remove('dragging'));
+      });
+      zones.forEach(zone => {
+        const target = $('.dnd-zone-target', zone);
+        if (!target) return;
+        target.addEventListener('dragover', e => { e.preventDefault(); target.classList.add('drag-over'); });
+        target.addEventListener('dragleave', () => target.classList.remove('drag-over'));
+        target.addEventListener('drop', e => {
+          e.preventDefault(); target.classList.remove('drag-over');
+          const answer = e.dataTransfer.getData('text/plain');
+          const chip = $('.dnd-chip[data-answer="' + answer + '"]', containerEl);
+          if (!chip) return;
+          target.textContent = chip.textContent; target.dataset.placed = answer; chip.classList.add('placed');
+        });
+      });
+      chips.forEach(chip => {
+        chip.addEventListener('touchstart', e => {
+          e.preventDefault();
+          const touch = e.touches[0];
+          const ghost = chip.cloneNode(true);
+          ghost.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;left:' + (touch.clientX - 40) + 'px;top:' + (touch.clientY - 20) + 'px;background:var(--color-accent);color:white;padding:0.5rem 1rem;border-radius:9999px;font-size:0.875rem;font-weight:600;opacity:0.85;';
+          document.body.appendChild(ghost); chip._ghost = ghost; chip._answer = chip.dataset.answer;
+        }, { passive: false });
+        chip.addEventListener('touchmove', e => {
+          e.preventDefault(); const touch = e.touches[0];
+          if (chip._ghost) { chip._ghost.style.left = (touch.clientX - 40) + 'px'; chip._ghost.style.top = (touch.clientY - 20) + 'px'; }
+          zones.forEach(z => { const t = $('.dnd-zone-target', z); if (t) t.classList.remove('drag-over'); });
+          const el = document.elementFromPoint(touch.clientX, touch.clientY);
+          const zt = el && el.closest('.dnd-zone-target'); if (zt) zt.classList.add('drag-over');
+        }, { passive: false });
+        chip.addEventListener('touchend', e => {
+          if (chip._ghost) { chip._ghost.remove(); chip._ghost = null; }
+          const touch = e.changedTouches[0];
+          const el = document.elementFromPoint(touch.clientX, touch.clientY);
+          const zt = el && el.closest('.dnd-zone-target');
+          if (zt) { zt.textContent = chip.textContent; zt.dataset.placed = chip._answer; chip.classList.add('placed'); }
+          zones.forEach(z => { const t = $('.dnd-zone-target', z); if (t) t.classList.remove('drag-over'); });
+        });
+      });
+    }
+    window.checkDnD = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.dnd-zone', container).forEach(zone => {
+        const target = $('.dnd-zone-target', zone);
+        if (!target || !target.dataset.placed) return;
+        if (target.dataset.placed === zone.dataset.correct) target.classList.add('correct-placed');
+        else target.classList.add('incorrect-placed');
+      });
+    };
+    window.resetDnD = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.dnd-zone-target', container).forEach(t => { t.textContent = 'Drop here'; delete t.dataset.placed; t.classList.remove('correct-placed', 'incorrect-placed'); });
+      $$('.dnd-chip', container).forEach(c => c.classList.remove('placed', 'dragging'));
+    };
+    $$('.dnd-container').forEach(el => initDnD(el));
+
+    /* ── ARCH DIAGRAM ── */
+    $$('.arch-component').forEach(comp => {
+      comp.addEventListener('click', function () {
+        const diagram = this.closest('.arch-diagram');
+        $$('.arch-component', diagram).forEach(c => c.classList.remove('active'));
+        this.classList.add('active');
+        const descEl = $('.arch-description', diagram);
+        if (descEl) descEl.textContent = this.dataset.desc || '';
+      });
+    });
+
+    /* ── GROUP CHAT ── */
+    function initChat(containerEl) {
+      if (!containerEl) return;
+      const msgs = $$('.chat-msg', containerEl);
+      const playBtn = $('.chat-play-btn', containerEl);
+      const resetBtn = $('.chat-reset-btn', containerEl);
+      let timers = [];
+      function reset() {
+        timers.forEach(t => clearTimeout(t));
+        timers = [];
+        msgs.forEach(m => m.classList.remove('shown'));
+        if (playBtn) playBtn.disabled = false;
+      }
+      function play() {
+        reset();
+        if (playBtn) playBtn.disabled = true;
+        msgs.forEach((m, i) => {
+          timers.push(setTimeout(() => {
+            m.classList.add('shown');
+            m.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+            if (i === msgs.length - 1 && playBtn) playBtn.disabled = false;
+          }, 350 + i * 1100));
+        });
+      }
+      if (playBtn) playBtn.addEventListener('click', play);
+      if (resetBtn) resetBtn.addEventListener('click', reset);
+    }
+    $$('.chat-container').forEach(el => initChat(el));
+
+    /* ── FLOW ANIMATION ── */
+    function initFlow(containerEl) {
+      if (!containerEl) return;
+      const stepsData = JSON.parse(containerEl.dataset.steps || '[]');
+      const labelEl = $('.flow-step-label', containerEl);
+      const progressEl = $('.flow-progress', containerEl);
+      const packet = $('.flow-packet', containerEl);
+      let step = 0;
+      function updateProgress() { if (progressEl) progressEl.textContent = 'Step ' + step + ' / ' + stepsData.length; }
+      function animatePacket(fromId, toId) {
+        if (!packet) return;
+        const fromEl = $('#' + fromId), toEl = $('#' + toId);
+        if (!fromEl || !toEl) return;
+        const fromR = fromEl.getBoundingClientRect(), toR = toEl.getBoundingClientRect(), contR = containerEl.getBoundingClientRect();
+        const fx = fromR.left + fromR.width / 2 - contR.left, fy = fromR.top + fromR.height / 2 - contR.top;
+        const tx = toR.left + toR.width / 2 - contR.left, ty = toR.top + toR.height / 2 - contR.top;
+        packet.style.setProperty('--packet-from-x', fx + 'px'); packet.style.setProperty('--packet-from-y', fy + 'px');
+        packet.style.setProperty('--packet-to-x', tx + 'px'); packet.style.setProperty('--packet-to-y', ty + 'px');
+        packet.style.display = 'block'; packet.style.animation = 'none'; packet.offsetHeight;
+        packet.style.animation = 'packetMove 0.8s var(--ease-in-out) forwards';
+        setTimeout(() => { packet.style.display = 'none'; }, 850);
+      }
+      function next() {
+        if (step >= stepsData.length) return;
+        const s = stepsData[step];
+        $$('.flow-actor', containerEl).forEach(a => a.classList.remove('active'));
+        if (s.highlight) { const hEl = $('#flow-' + s.highlight, containerEl); if (hEl) hEl.classList.add('active'); }
+        if (s.packet && s.from && s.to) animatePacket('flow-' + s.from, 'flow-' + s.to);
+        if (labelEl) labelEl.textContent = s.label || '';
+        step++; updateProgress();
+      }
+      function reset() {
+        step = 0;
+        $$('.flow-actor', containerEl).forEach(a => a.classList.remove('active'));
+        const firstActor = $('.flow-actor', containerEl); if (firstActor) firstActor.classList.add('active');
+        if (labelEl) labelEl.textContent = 'Click "Next step" to begin the journey';
+        if (packet) packet.style.display = 'none';
+        updateProgress();
+      }
+      const nextBtn = $('.flow-next-btn', containerEl), resetBtn = $('.flow-reset-btn', containerEl);
+      if (nextBtn) nextBtn.addEventListener('click', next);
+      if (resetBtn) resetBtn.addEventListener('click', reset);
+      updateProgress();
+    }
+    $$('.flow-animation').forEach(el => initFlow(el));
+  })();
+  </script>
+</body>
+</html>

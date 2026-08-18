@@ -1,0 +1,1839 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>How the Nova Scheduler Picks a Host — The Procedure</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400;1,9..40,500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <style>
+  /* ── DESIGN TOKENS ─────────────────────────────────────────── */
+  :root {
+    --color-bg:             #FAF7F2;
+    --color-bg-warm:        #F5F0E8;
+    --color-bg-code:        #1E1E2E;
+    --color-text:           #2C2A28;
+    --color-text-secondary: #6B6560;
+    --color-text-muted:     #9E9790;
+    --color-border:         #E5DFD6;
+    --color-border-light:   #EEEBE5;
+    --color-surface:        #FFFFFF;
+    --color-surface-warm:   #FDF9F3;
+
+    /* ACCENT — plum, for the scheduling procedure */
+    --color-accent:         #6E5FA0;
+    --color-accent-hover:   #574A85;
+    --color-accent-light:   #EEEAF6;
+    --color-accent-muted:   #9488BE;
+
+    --color-success:        #2D8B55;
+    --color-success-light:  #E8F5EE;
+    --color-error:          #C93B3B;
+    --color-error-light:    #FDE8E8;
+    --color-info:           #2A7B9B;
+    --color-info-light:     #E4F2F7;
+
+    --color-actor-1:        #D94F30;
+    --color-actor-2:        #2A7B9B;
+    --color-actor-3:        #7B6DAA;
+    --color-actor-4:        #D4A843;
+    --color-actor-5:        #2D8B55;
+
+    --font-display: 'Bricolage Grotesque', Georgia, serif;
+    --font-body:    'DM Sans', -apple-system, sans-serif;
+    --font-mono:    'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+
+    --text-xs:   0.75rem;
+    --text-sm:   0.875rem;
+    --text-base: 1rem;
+    --text-lg:   1.125rem;
+    --text-xl:   1.25rem;
+    --text-2xl:  1.5rem;
+    --text-3xl:  1.875rem;
+    --text-4xl:  2.25rem;
+    --text-5xl:  3rem;
+    --text-6xl:  3.75rem;
+
+    --leading-tight:  1.15;
+    --leading-snug:   1.3;
+    --leading-normal: 1.6;
+    --leading-loose:  1.8;
+
+    --space-1:  0.25rem; --space-2:  0.5rem; --space-3:  0.75rem;
+    --space-4:  1rem;    --space-5:  1.25rem; --space-6:  1.5rem;
+    --space-8:  2rem;    --space-10: 2.5rem;  --space-12: 3rem;
+    --space-16: 4rem;    --space-20: 5rem;    --space-24: 6rem;
+
+    --content-width:      800px;
+    --content-width-wide: 1000px;
+    --nav-height:         50px;
+
+    --radius-sm:   8px;  --radius-md:   12px;
+    --radius-lg:   16px; --radius-full: 9999px;
+
+    --shadow-sm: 0 1px 2px rgba(44,42,40,0.05);
+    --shadow-md: 0 4px 12px rgba(44,42,40,0.08);
+    --shadow-lg: 0 8px 24px rgba(44,42,40,0.10);
+    --shadow-xl: 0 16px 48px rgba(44,42,40,0.12);
+
+    --ease-out:    cubic-bezier(0.16,1,0.3,1);
+    --ease-in-out: cubic-bezier(0.65,0,0.35,1);
+    --duration-fast:   150ms;
+    --duration-normal: 300ms;
+    --duration-slow:   500ms;
+    --stagger-delay:   120ms;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-snap-type: y proximity; scroll-behavior: smooth; }
+  body {
+    font-family: var(--font-body);
+    font-size: var(--text-base);
+    color: var(--color-text);
+    line-height: var(--leading-normal);
+    background: var(--color-bg);
+    background-image: radial-gradient(ellipse at 20% 50%, rgba(110,95,160,0.05) 0%, transparent 50%);
+  }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: var(--radius-full); }
+
+  pre, code { white-space: pre-wrap; word-break: break-word; overflow-x: hidden; }
+  .translation-code::-webkit-scrollbar, pre::-webkit-scrollbar { display: none; }
+
+  .code-keyword  { color: #CBA6F7; }
+  .code-string   { color: #A6E3A1; }
+  .code-function { color: #89B4FA; }
+  .code-comment  { color: #6C7086; }
+  .code-number   { color: #FAB387; }
+  .code-property { color: #F9E2AF; }
+  .code-operator { color: #94E2D5; }
+  .code-class    { color: #F9E2AF; }
+  .code-line     { display: block; }
+
+  /* ── NAV ── */
+  .nav {
+    position: fixed; top: 0; left: 0; right: 0;
+    height: var(--nav-height); z-index: 1000;
+    background: rgba(250,247,242,0.92); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--color-border-light);
+  }
+  .progress-bar { position: absolute; bottom: 0; left: 0; height: 2px; width: 0%; background: var(--color-accent); transition: width 100ms linear; }
+  .nav-inner { max-width: var(--content-width-wide); margin: 0 auto; padding: 0 var(--space-6); height: 100%; display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
+  .nav-title { font-family: var(--font-display); font-size: var(--text-sm); font-weight: 600; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; }
+  .nav-dots { display: flex; align-items: center; gap: var(--space-2); }
+  .nav-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--color-text-muted); background: transparent; cursor: pointer; transition: all var(--duration-fast); position: relative; }
+  .nav-dot::after { content: attr(data-tooltip); position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: var(--color-bg-code); color: #CDD6F4; font-family: var(--font-body); font-size: var(--text-xs); white-space: nowrap; padding: var(--space-1) var(--space-3); border-radius: var(--radius-sm); pointer-events: none; opacity: 0; transition: opacity var(--duration-fast); }
+  .nav-dot:hover::after { opacity: 1; }
+  .nav-dot.active { border-color: var(--color-accent); background: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-light); }
+  .nav-dot.visited { border-color: var(--color-accent-muted); background: var(--color-accent-muted); }
+
+  /* ── MODULE ── */
+  .module { min-height: 100dvh; min-height: 100vh; scroll-snap-align: start; padding: var(--space-16) var(--space-6); padding-top: calc(var(--nav-height) + var(--space-12)); }
+  .module-content { max-width: var(--content-width); margin: 0 auto; }
+  .module-header { margin-bottom: var(--space-12); }
+  .module-number { display: block; font-family: var(--font-display); font-size: var(--text-6xl); font-weight: 800; color: var(--color-accent); opacity: 0.15; line-height: 1; margin-bottom: var(--space-2); }
+  .module-title { font-family: var(--font-display); font-size: var(--text-4xl); font-weight: 700; line-height: var(--leading-tight); color: var(--color-text); }
+  .module-subtitle { margin-top: var(--space-3); font-size: var(--text-lg); color: var(--color-text-secondary); line-height: var(--leading-snug); }
+  .screen { margin-bottom: var(--space-16); }
+  .screen-heading { font-family: var(--font-display); font-size: var(--text-2xl); font-weight: 600; color: var(--color-text); margin-bottom: var(--space-6); line-height: var(--leading-snug); }
+  p { margin-bottom: var(--space-4); }
+  p:last-child { margin-bottom: 0; }
+  .lead { font-size: var(--text-lg); }
+
+  /* ── ANIMATIONS ── */
+  .animate-in { opacity: 0; transform: translateY(20px); transition: opacity var(--duration-slow) var(--ease-out), transform var(--duration-slow) var(--ease-out); }
+  .animate-in.visible { opacity: 1; transform: translateY(0); }
+  .stagger-children > .animate-in { transition-delay: calc(var(--stagger-index, 0) * var(--stagger-delay)); }
+
+  /* ── HERO ── */
+  .hero { min-height: 100vh; display: flex; flex-direction: column; justify-content: center; padding: var(--space-16) var(--space-6); max-width: var(--content-width); margin: 0 auto; }
+  .hero-eyebrow { font-family: var(--font-mono); font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.15em; color: var(--color-accent); margin-bottom: var(--space-4); }
+  .hero-title { font-family: var(--font-display); font-size: var(--text-6xl); font-weight: 800; line-height: 1.05; margin-bottom: var(--space-6); }
+  .hero-sub { font-size: var(--text-xl); color: var(--color-text-secondary); max-width: 640px; margin-bottom: var(--space-8); }
+  .hero-meta { display: flex; gap: var(--space-6); flex-wrap: wrap; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-text-muted); }
+  .hero-meta span { display: flex; align-items: center; gap: var(--space-2); }
+
+  /* ── TRANSLATION ── */
+  .translation-block { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-radius: var(--radius-md); overflow: hidden; box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .translation-code { background: var(--color-bg-code); color: #CDD6F4; padding: var(--space-6); font-family: var(--font-mono); font-size: var(--text-sm); line-height: 1.7; position: relative; overflow-x: hidden; }
+  .translation-english { background: var(--color-surface-warm); padding: var(--space-6); font-size: var(--text-sm); line-height: 1.7; border-left: 3px solid var(--color-accent); }
+  .translation-label { position: absolute; top: var(--space-2); right: var(--space-3); font-family: var(--font-mono); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.5; }
+  .translation-english .translation-label { position: static; display: block; margin-bottom: var(--space-3); color: var(--color-text-muted); }
+  .translation-english strong { color: var(--color-text); }
+  .file-ref { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-accent); background: var(--color-accent-light); padding: 1px 6px; border-radius: 4px; }
+
+  /* ── FLOW ANIMATION ── */
+  .flow-animation { position: relative; background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-8); box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .flow-actors { display: flex; justify-content: center; align-items: center; gap: var(--space-4); margin-bottom: var(--space-8); flex-wrap: wrap; }
+  .flow-actor { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); transition: all var(--duration-normal) var(--ease-out); }
+  .flow-actor-icon { width: 54px; height: 54px; border-radius: var(--radius-md); background: var(--color-bg-warm); border: 2px solid var(--color-border); display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-size: var(--text-base); font-weight: 700; transition: all var(--duration-normal) var(--ease-out); color: var(--color-text-secondary); }
+  .flow-actor span { font-size: var(--text-xs); color: var(--color-text-secondary); font-family: var(--font-mono); text-align: center; }
+  .flow-actor.active .flow-actor-icon { border-color: var(--color-accent); background: var(--color-accent-light); box-shadow: 0 0 0 3px var(--color-accent-light), 0 0 20px rgba(110,95,160,0.18); transform: scale(1.12); color: var(--color-accent-hover); }
+  .flow-packet { width: 16px; height: 16px; border-radius: 50%; background: var(--color-accent); position: absolute; pointer-events: none; display: none; box-shadow: 0 0 8px rgba(110,95,160,0.6); z-index: 5; }
+  .flow-step-label { text-align: center; font-size: var(--text-sm); color: var(--color-text); min-height: 3em; padding: var(--space-3) var(--space-4); background: var(--color-bg-warm); border-radius: var(--radius-sm); margin-bottom: var(--space-6); line-height: var(--leading-normal); }
+  .flow-controls { display: flex; align-items: center; gap: var(--space-3); }
+  .flow-progress { margin-left: auto; font-size: var(--text-xs); color: var(--color-text-muted); font-family: var(--font-mono); }
+
+  /* ── ARCH DIAGRAM ── */
+  .arch-diagram { background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-8); box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .arch-zone { border: 1px dashed var(--color-border); border-radius: var(--radius-md); padding: var(--space-6); margin-bottom: var(--space-4); }
+  .arch-zone-label { font-family: var(--font-mono); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-muted); margin-bottom: var(--space-4); }
+  .arch-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+  .arch-component { display: inline-flex; flex-direction: column; align-items: center; gap: var(--space-2); padding: var(--space-4); background: var(--color-surface-warm); border: 1px solid var(--color-border); border-radius: var(--radius-md); cursor: pointer; margin: var(--space-2); transition: all var(--duration-fast); font-size: var(--text-sm); min-width: 120px; }
+  .arch-component:hover, .arch-component.active { border-color: var(--color-accent); background: var(--color-accent-light); transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+  .arch-component strong { font-family: var(--font-display); }
+  .arch-component small { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+  .arch-description { margin-top: var(--space-4); padding: var(--space-4); background: var(--color-bg-warm); border-radius: var(--radius-sm); font-size: var(--text-sm); color: var(--color-text-secondary); min-height: 2.5em; }
+
+  /* ── CALLOUT ── */
+  .callout { display: flex; gap: var(--space-4); padding: var(--space-5); border-radius: var(--radius-md); margin: var(--space-6) 0; border-left: 4px solid; }
+  .callout-accent  { background: var(--color-accent-light);  border-color: var(--color-accent); }
+  .callout-info    { background: var(--color-info-light);    border-color: var(--color-info); }
+  .callout-warning { background: var(--color-error-light);   border-color: var(--color-error); }
+  .callout-success { background: var(--color-success-light); border-color: var(--color-success); }
+  .callout-icon { font-size: 1.25rem; flex-shrink: 0; margin-top: 2px; }
+  .callout-title { display: block; font-weight: 700; margin-bottom: var(--space-1); }
+  .callout-content p { font-size: var(--text-sm); margin: 0; color: var(--color-text-secondary); }
+
+  /* ── STEP CARDS ── */
+  .step-cards { display: flex; flex-direction: column; gap: var(--space-3); margin: var(--space-6) 0; }
+  .step-card { display: flex; align-items: flex-start; gap: var(--space-4); padding: var(--space-4) var(--space-5); background: var(--color-surface); border-radius: var(--radius-md); border-left: 3px solid var(--color-accent); box-shadow: var(--shadow-sm); }
+  .step-num { width: 32px; height: 32px; border-radius: 50%; background: var(--color-accent); color: white; font-weight: 700; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); flex-shrink: 0; }
+  .step-body strong { display: block; font-weight: 600; margin-bottom: var(--space-1); }
+  .step-body p { margin: 0; color: var(--color-text-secondary); font-size: var(--text-sm); }
+  .step-body .src { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+
+  /* ── PATTERN CARDS ── */
+  .pattern-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-4); margin: var(--space-6) 0; }
+  .pattern-card { background: var(--color-surface); border-radius: var(--radius-md); padding: var(--space-6); box-shadow: var(--shadow-sm); border-top: 3px solid var(--color-accent); transition: transform var(--duration-normal) var(--ease-out), box-shadow var(--duration-normal); }
+  .pattern-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-md); }
+  .pattern-icon { font-size: 1.5rem; margin-bottom: var(--space-3); }
+  .pattern-title { font-family: var(--font-display); font-size: var(--text-base); font-weight: 700; margin-bottom: var(--space-2); }
+  .pattern-desc { font-size: var(--text-sm); color: var(--color-text-secondary); line-height: var(--leading-normal); margin: 0; }
+
+  /* ── STATE TIMELINE ── */
+  .state-track { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: var(--space-6) 0; }
+  .state-pill { font-family: var(--font-mono); font-size: var(--text-xs); padding: var(--space-2) var(--space-3); border-radius: var(--radius-full); background: var(--color-surface); border: 1px solid var(--color-border); }
+  .state-pill.vm { background: var(--color-accent-light); border-color: var(--color-accent-muted); color: var(--color-accent-hover); font-weight: 600; }
+  .state-pill.task { background: var(--color-surface-warm); color: var(--color-text-secondary); }
+  .state-pill.done { background: var(--color-success-light); border-color: var(--color-success); color: var(--color-success); font-weight: 600; }
+  .state-arrow { color: var(--color-text-muted); }
+
+  /* ── OPS CHECK (terminal verification panel) ── */
+  .ops-check { background: var(--color-bg-code); border-radius: var(--radius-md); margin: var(--space-6) 0; box-shadow: var(--shadow-md); overflow: hidden; }
+  .ops-check-head { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-5); background: rgba(255,255,255,0.05); border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .ops-check-badge { font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #1E1E2E; background: #A6E3A1; padding: 2px 8px; border-radius: 4px; flex-shrink: 0; }
+  .ops-check-title { font-size: var(--text-sm); color: #CDD6F4; font-family: var(--font-body); }
+  .ops-check-body { padding: var(--space-5); font-family: var(--font-mono); font-size: var(--text-sm); line-height: 1.75; color: #CDD6F4; }
+  .ops-check-body .prompt { color: #6C7086; user-select: none; }
+  .ops-check-body .cmd { color: #A6E3A1; }
+  .ops-check-body .out { color: #9399B2; }
+  .ops-check-body .hl { color: #F9E2AF; }
+  .ops-check-body .note { color: #89B4FA; font-style: italic; }
+
+  /* ── QUIZ ── */
+  .quiz-container { background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-8); box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .quiz-question-block { margin-bottom: var(--space-8); }
+  .quiz-question-block:last-of-type { margin-bottom: 0; }
+  .quiz-question { font-family: var(--font-display); font-size: var(--text-lg); font-weight: 600; margin-bottom: var(--space-4); line-height: var(--leading-snug); }
+  .quiz-options { display: flex; flex-direction: column; gap: var(--space-2); }
+  .quiz-option { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: 2px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); cursor: pointer; width: 100%; text-align: left; font-family: var(--font-body); font-size: var(--text-base); transition: border-color var(--duration-fast), background var(--duration-fast); }
+  .quiz-option:hover:not(:disabled) { border-color: var(--color-accent-muted); }
+  .quiz-option.selected { border-color: var(--color-accent); background: var(--color-accent-light); }
+  .quiz-option.correct  { border-color: var(--color-success); background: var(--color-success-light); }
+  .quiz-option.incorrect{ border-color: var(--color-error);   background: var(--color-error-light); }
+  .quiz-option:disabled { cursor: default; }
+  .quiz-option-radio { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--color-border); flex-shrink: 0; transition: all var(--duration-fast); }
+  .quiz-option.selected .quiz-option-radio { border-color: var(--color-accent); background: var(--color-accent); box-shadow: inset 0 0 0 3px white; }
+  .quiz-option.correct .quiz-option-radio  { border-color: var(--color-success); background: var(--color-success); box-shadow: inset 0 0 0 3px white; }
+  .quiz-option.incorrect .quiz-option-radio{ border-color: var(--color-error);   background: var(--color-error);   box-shadow: inset 0 0 0 3px white; }
+  .quiz-feedback { max-height: 0; overflow: hidden; opacity: 0; transition: max-height var(--duration-normal), opacity var(--duration-normal); font-size: var(--text-sm); border-radius: var(--radius-sm); }
+  .quiz-feedback.show { max-height: 240px; opacity: 1; padding: var(--space-3); margin-top: var(--space-2); }
+  .quiz-feedback.success { background: var(--color-success-light); color: var(--color-success); }
+  .quiz-feedback.error   { background: var(--color-error-light);   color: var(--color-error); }
+  .quiz-feedback.warning { background: var(--color-info-light);    color: var(--color-info); }
+  .quiz-check-btn, .quiz-reset-btn { margin-top: var(--space-6); padding: var(--space-3) var(--space-6); border-radius: var(--radius-sm); font-family: var(--font-body); font-size: var(--text-sm); font-weight: 600; cursor: pointer; border: none; transition: background var(--duration-fast), transform var(--duration-fast); }
+  .quiz-check-btn { background: var(--color-accent); color: white; margin-right: var(--space-3); }
+  .quiz-check-btn:hover { background: var(--color-accent-hover); transform: translateY(-1px); }
+  .quiz-reset-btn { background: var(--color-surface); color: var(--color-text-secondary); border: 1px solid var(--color-border); }
+  .quiz-reset-btn:hover { border-color: var(--color-accent-muted); }
+
+  /* ── DND ── */
+  .dnd-container { margin: var(--space-8) 0; }
+  .dnd-chips { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-bottom: var(--space-6); }
+  .dnd-chip { padding: var(--space-2) var(--space-4); background: var(--color-accent); color: white; border-radius: var(--radius-full); font-size: var(--text-sm); font-weight: 600; cursor: grab; user-select: none; transition: opacity var(--duration-fast), transform var(--duration-fast); }
+  .dnd-chip:active { cursor: grabbing; transform: scale(1.05); }
+  .dnd-chip.dragging { opacity: 0.4; }
+  .dnd-chip.placed { opacity: 0.3; pointer-events: none; }
+  .dnd-zones { display: flex; flex-direction: column; gap: var(--space-4); }
+  .dnd-zone { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); background: var(--color-surface); }
+  .dnd-zone-label { font-size: var(--text-sm); color: var(--color-text-secondary); margin-bottom: var(--space-3); }
+  .dnd-zone-target { min-height: 40px; border: 2px dashed var(--color-border); border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; font-size: var(--text-sm); color: var(--color-text-muted); transition: border-color var(--duration-fast), background var(--duration-fast); }
+  .dnd-zone-target.drag-over { border-color: var(--color-accent); background: var(--color-accent-light); }
+  .dnd-zone-target.correct-placed { border-color: var(--color-success); background: var(--color-success-light); color: var(--color-success); font-weight: 600; }
+  .dnd-zone-target.incorrect-placed{ border-color: var(--color-error); background: var(--color-error-light); }
+  .btn { padding: var(--space-2) var(--space-5); border-radius: var(--radius-sm); border: 1px solid var(--color-border); background: var(--color-surface); font-family: var(--font-body); font-size: var(--text-sm); font-weight: 600; cursor: pointer; transition: all var(--duration-fast); color: var(--color-text-secondary); }
+  .btn:hover { border-color: var(--color-accent-muted); color: var(--color-accent); }
+  .btn-primary { background: var(--color-accent); color: white; border-color: var(--color-accent); }
+  .btn-primary:hover { background: var(--color-accent-hover); border-color: var(--color-accent-hover); color: white; }
+
+  /* ── GLOSSARY ── */
+  .term { border-bottom: 1.5px dashed var(--color-accent-muted); cursor: pointer; }
+  .term:hover, .term.active { border-bottom-color: var(--color-accent); color: var(--color-accent); }
+  .term-tooltip { position: fixed; background: var(--color-bg-code); color: #CDD6F4; padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); font-size: var(--text-sm); font-family: var(--font-body); line-height: var(--leading-normal); width: max(200px, min(320px, 80vw)); box-shadow: var(--shadow-lg); pointer-events: none; opacity: 0; transition: opacity var(--duration-fast); z-index: 10000; }
+  .term-tooltip::after { content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 6px solid transparent; border-top-color: var(--color-bg-code); }
+  .term-tooltip.visible { opacity: 1; }
+  .term-tooltip.flip::after { top: auto; bottom: 100%; border-top-color: transparent; border-bottom-color: var(--color-bg-code); }
+
+  .footer { text-align: center; padding: var(--space-16) var(--space-6); color: var(--color-text-muted); font-size: var(--text-sm); border-top: 1px solid var(--color-border-light); }
+
+  @media (max-width: 768px) {
+    :root { --text-4xl: 1.875rem; --text-5xl: 2.25rem; --text-6xl: 3rem; }
+    .translation-block { grid-template-columns: 1fr; }
+    .translation-english { border-left: none; border-top: 3px solid var(--color-accent); }
+    .pattern-cards { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 480px) {
+    :root { --text-4xl: 1.5rem; --text-5xl: 1.875rem; --text-6xl: 2.25rem; }
+    .module { padding: var(--space-8) var(--space-4); }
+    .pattern-cards { grid-template-columns: 1fr; }
+    .nav-title { max-width: 150px; }
+  }
+
+  @keyframes packetMove {
+    from { left: var(--packet-from-x); top: var(--packet-from-y); opacity: 0; }
+    20%  { opacity: 1; }
+    80%  { opacity: 1; }
+    to   { left: var(--packet-to-x); top: var(--packet-to-y); opacity: 0; }
+  }
+
+  /* ── AGGREGATE ROUTING BOARD (module 08) ── */
+  .board { background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-6); box-shadow: var(--shadow-md); }
+  .board-svg { width: 100%; height: auto; display: block; }
+  .route { fill: none; stroke-width: 3.5; transition: stroke var(--duration-normal), opacity var(--duration-normal), stroke-width var(--duration-normal); }
+  .route.allow { stroke: #2D8B55; opacity: 0.95; }
+  .route.block { stroke: #C93B3B; opacity: 0.28; stroke-width: 2.5; stroke-dasharray: 8 7; }
+  .svg-hidden { display: none; }
+  .bnode { stroke-width: 2.5; }
+  .bnode.has   { stroke: #3B6EA5; }
+  .bnode.plain { stroke: #BDB7AC; }
+  .bnode.subj  { fill: var(--color-surface); }
+  .bnode.agg   { fill: var(--color-bg-warm); }
+  .bnode.agg.has { fill: #EAF1F9; }
+  .bnode-title { font-family: var(--font-display); font-weight: 700; font-size: 17px; fill: var(--color-text); }
+  .bnode-sub   { font-family: var(--font-mono); font-size: 11.5px; fill: var(--color-text-secondary); }
+  .bnode-mono  { font-family: var(--font-mono); font-size: 10px; font-weight: 600; fill: #2B5C92; }
+
+  .filter-groups { display: flex; flex-direction: column; gap: var(--space-3); margin-top: var(--space-6); }
+  .filter-group { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+  .filter-cat { font-family: var(--font-mono); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--color-text-muted); min-width: 168px; }
+  .filter-btn { padding: var(--space-2) var(--space-4); border-radius: var(--radius-full); border: 1.5px solid var(--color-border); background: var(--color-surface); font-family: var(--font-body); font-size: var(--text-sm); font-weight: 600; cursor: pointer; transition: all var(--duration-fast); color: var(--color-text-secondary); }
+  .filter-btn:hover { border-color: var(--color-accent-muted); color: var(--color-accent); }
+  .filter-btn.active { border-color: var(--color-accent); background: var(--color-accent-light); color: var(--color-accent-hover); }
+
+  .board-note { margin-top: var(--space-4); font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+  .board-summary { margin-top: var(--space-4); padding: var(--space-5); background: var(--color-accent-light); border-left: 4px solid var(--color-accent); border-radius: var(--radius-md); font-size: var(--text-sm); line-height: var(--leading-normal); }
+
+  .matrix { width: 100%; border-collapse: collapse; margin-top: var(--space-6); font-size: var(--text-sm); }
+  .matrix th, .matrix td { padding: var(--space-3) var(--space-4); border: 1px solid var(--color-border-light); text-align: left; vertical-align: top; }
+  .matrix thead th { font-family: var(--font-mono); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); background: var(--color-surface-warm); }
+  .matrix tbody th { font-family: var(--font-display); font-weight: 700; }
+  .matrix td.cell { transition: background var(--duration-normal); }
+  .matrix td.cell.ok  { background: var(--color-success-light); }
+  .matrix td.cell.bad { background: var(--color-error-light); }
+  .matrix .verdict { font-family: var(--font-display); font-weight: 800; font-size: var(--text-lg); display: block; }
+  .matrix .verdict.ok  { color: var(--color-success); }
+  .matrix .verdict.bad { color: var(--color-error); }
+  .matrix .why { display: block; margin-top: 4px; font-size: var(--text-xs); color: var(--color-text-secondary); line-height: 1.45; }
+
+  .board-legend { display: flex; flex-wrap: wrap; gap: var(--space-4); margin-top: var(--space-4); font-size: var(--text-xs); color: var(--color-text-secondary); font-family: var(--font-mono); }
+  .board-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .board-legend i { width: 16px; height: 4px; border-radius: 2px; display: inline-block; }
+  @media (max-width: 600px) { .filter-cat { min-width: 0; width: 100%; } }
+  .cmp-table { width: 100%; border-collapse: collapse; margin: var(--space-6) 0; font-size: var(--text-sm); }
+  .cmp-table th, .cmp-table td { text-align: left; padding: var(--space-3) var(--space-4); border-bottom: 1px solid var(--color-border-light); vertical-align: top; }
+  .cmp-table th { font-family: var(--font-mono); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); }
+  .cmp-table tr:hover td { background: var(--color-surface-warm); }
+  .yes { color: var(--color-success); font-weight: 700; }
+  .no  { color: var(--color-error); font-weight: 700; }
+  .weak{ color: #B08415; font-weight: 700; }
+  </style>
+</head>
+<body>
+
+  <nav class="nav" id="nav">
+    <div class="progress-bar" id="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+    <div class="nav-inner">
+      <span class="nav-title">Nova Scheduling</span>
+      <div class="nav-dots" id="nav-dots" role="tablist">
+        <button class="nav-dot" data-target="hero" data-tooltip="Start" role="tab" aria-label="Start"></button>
+        <button class="nav-dot" data-target="module-0" data-tooltip="The Cast of Characters" role="tab" aria-label="Module 0"></button>
+        <button class="nav-dot" data-target="module-1" data-tooltip="Conductor Hands Off" role="tab" aria-label="Module 1"></button>
+        <button class="nav-dot" data-target="module-2" data-tooltip="Request Filters" role="tab" aria-label="Module 2"></button>
+        <button class="nav-dot" data-target="module-3" data-tooltip="Ask Placement" role="tab" aria-label="Module 3"></button>
+        <button class="nav-dot" data-target="module-4" data-tooltip="Build Host States" role="tab" aria-label="Module 4"></button>
+        <button class="nav-dot" data-target="module-5" data-tooltip="Filter & Weigh" role="tab" aria-label="Module 5"></button>
+        <button class="nav-dot" data-target="module-6" data-tooltip="Claim & Select" role="tab" aria-label="Module 6"></button>
+        <button class="nav-dot" data-target="module-7" data-tooltip="Filter & Weigher Reference" role="tab" aria-label="Module 7"></button>
+        <button class="nav-dot" data-target="module-aggregates" data-tooltip="Aggregate Isolation" role="tab" aria-label="Module 8"></button>
+        <button class="nav-dot" data-target="module-8" data-tooltip="The Full Journey" role="tab" aria-label="Module 9"></button>
+        <button class="nav-dot" data-target="module-9" data-tooltip="When It Goes Wrong" role="tab" aria-label="Module 10"></button>
+        <button class="nav-dot" data-target="module-10" data-tooltip="Check Yourself" role="tab" aria-label="Module 11"></button>
+      </div>
+    </div>
+  </nav>
+
+  <main id="main">
+
+  <!-- ════════════ HERO ════════════ -->
+  <section class="module" id="hero" style="background: var(--color-bg);">
+    <div class="hero">
+      <div class="hero-eyebrow animate-in">OpenStack Nova · Detailed Scheduling Procedure</div>
+      <h1 class="hero-title animate-in">How does the scheduler<br>pick a host?</h1>
+      <p class="hero-sub animate-in">The conductor asks nova-scheduler to find a home for your instance. The scheduler mutates the request, queries Placement for candidates, builds in-memory host objects, runs filters then weighers, claims the resources on the winner, and hands back one or more <code>Selection</code> objects. This is that procedure, traced from real Nova source.</p>
+      <div class="hero-meta animate-in">
+        <span>⏱️ ~14 min read</span>
+        <span>🧩 8 stages</span>
+        <span>🎯 allocation candidates · filters · weighers · claims</span>
+        <span>🔎 an ops check at every step</span>
+        <span>🖱️ Interactive</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 0 — CAST ════════════ -->
+  <section class="module" id="module-0" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">00</span>
+        <h1 class="module-title">The cast of characters</h1>
+        <p class="module-subtitle">Picking a host is a pipeline. Before we trace it, meet the four core ideas and the players that carry them out.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Four ideas that run the whole thing</h2>
+          <p>The entire procedure is built on four concepts. Hold these in your head and the rest is just detail.</p>
+          <div class="pattern-cards stagger-children">
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">🧮</div>
+              <div class="pattern-title">Allocation candidates</div>
+              <p class="pattern-desc">Placement is the resource accountant. Given a list of needed resources, it returns every <span class="term" data-definition="A claimable JSON payload from Placement describing exactly which resources on which provider tree would satisfy the request. The scheduler later PUTs one of these to claim a host.">allocation candidate</span> — a provider tree with room — plus a <span class="term" data-definition="The inventory, capacity and traits Placement reports for each candidate provider UUID, returned alongside the allocation requests.">provider summary</span> for each.</p>
+            </div>
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">🚪</div>
+              <div class="pattern-title">Filters are pass/fail gates</div>
+              <p class="pattern-desc">Each filter answers yes or no for every host. A host that fails any filter is dropped. What survives is the set of <em>acceptable</em> hosts. No scores, just gates.</p>
+            </div>
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">⚖️</div>
+              <div class="pattern-title">Weighers are scorers</div>
+              <p class="pattern-desc">Each weigher gives every surviving host a number. The numbers are normalized, multiplied by a multiplier and summed, then hosts sort best-to-worst. This is ranking, not gating.</p>
+            </div>
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">🔒</div>
+              <div class="pattern-title">Claim-based placement</div>
+              <p class="pattern-desc">Ranking is not enough — two requests might like the same host. The scheduler <em>claims</em> resources in Placement (PUT /allocations) on the best host. The first claim to succeed wins; a <span class="term" data-definition="When two requests race for the same provider, Placement's generation number changes; the loser's PUT is rejected with placement.concurrent_update.">generation conflict</span> sends the loser to the next host.</p>
+            </div>
+          </div>
+          <div class="callout callout-accent">
+            <div class="callout-icon">💡</div>
+            <div class="callout-content">
+              <span class="callout-title">The order matters</span>
+              <p>The canonical order never changes: <strong>request_filters → Placement candidates → host states → filters → weighers → claim → alternates</strong>. Most confusion comes from mixing up the request filters (before Placement) with the in-process filters (after Placement).</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Meet the players (click each one)</h2>
+          <p>These are the components your scheduling request flows through. Click any box to learn its job.</p>
+          <div class="arch-diagram">
+            <div class="arch-zone">
+              <div class="arch-zone-label">Inside Nova — RPC and in-process Python</div>
+              <div class="arch-row">
+                <div class="arch-component active" data-desc="The origin of the scheduling request. ComputeTaskManager._schedule_instances() sets up the server-group affinity state, then makes a synchronous RPC CALL to the scheduler. It does not pick hosts itself. (nova/conductor/manager.py)">
+                  <strong>nova-conductor</strong><small>the requester</small>
+                </div>
+                <div class="arch-component" data-desc="The server-side orchestrator. select_destinations() → _select_destinations() → _schedule() runs the whole pipeline: request filters, Placement query, host states, filters, weighers, claim, alternates. (nova/scheduler/manager.py)">
+                  <strong>SchedulerManager</strong><small>the orchestrator</small>
+                </div>
+                <div class="arch-component" data-desc="Builds and caches HostState objects from compute-node DB records by scatter-gathering across enabled cells, and runs the filters and weighers. (nova/scheduler/host_manager.py)">
+                  <strong>HostManager</strong><small>builds host states</small>
+                </div>
+                <div class="arch-component" data-desc="The input. Flavor, image, networks, num_instances, scheduler_hints, instance_group, requested_destination, force_hosts/nodes, and trait sets root_required/root_forbidden mutated by the request filters. (nova/objects/request_spec.py)">
+                  <strong>RequestSpec</strong><small>the input</small>
+                </div>
+                <div class="arch-component" data-desc="The pre-placement mutators. process_reqspec runs ALL_REQUEST_FILTERS in order: tenant aggregate, AZ-to-aggregate, image-type traits, forbidden COMPUTE_STATUS_DISABLED. They do not drop hosts; they tighten the RequestSpec. (nova/scheduler/request_filter.py)">
+                  <strong>request_filters</strong><small>mutate the spec</small>
+                </div>
+                <div class="arch-component" data-desc="The pass/fail gates. BaseFilterHandler runs each enabled filter in order; each yields only the hosts it accepts. (nova/filters.py, nova/scheduler/filters/)">
+                  <strong>filters</strong><small>pass/fail gates</small>
+                </div>
+                <div class="arch-component" data-desc="The scorers. BaseWeightHandler normalizes and sums per-weigher scores to rank the survivors highest-first. (nova/weights.py, nova/scheduler/weights/)">
+                  <strong>weighers</strong><small>scorers</small>
+                </div>
+                <div class="arch-component" data-desc="The report client wrapper around Placement: get_allocation_candidates() (GET /allocation_candidates) and claim_resources() (PUT /allocations). (nova/scheduler/client/report.py)">
+                  <strong>report client</strong><small>talks to Placement</small>
+                </div>
+              </div>
+            </div>
+            <div class="arch-zone">
+              <div class="arch-zone-label">Another OpenStack project — reached over REST</div>
+              <div class="arch-row">
+                <div class="arch-component" data-desc="The resource accountant. Tracks inventory and allocations for every provider. The scheduler asks it GET /allocation_candidates for hosts that fit, and PUT /allocations to claim the winner. Its generation numbers make claims race-safe.">
+                  <strong>Placement</strong><small>resource accounting</small>
+                </div>
+              </div>
+            </div>
+            <div class="arch-description">nova-conductor — the origin of the scheduling request. It sets up the server-group affinity state, then makes a synchronous RPC CALL to the scheduler asking for Selection objects and alternates. It does not pick hosts itself.</div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The procedure in one breath</h2>
+          <p>Here is the canonical order, compressed. The rest of the course unpacks each stage.</p>
+          <div class="step-cards stagger-children">
+            <div class="step-card animate-in"><div class="step-num">1</div><div class="step-body"><strong>request_filters mutate the spec</strong><p>Before Placement, <code>process_reqspec</code> tightens the RequestSpec with required/forbidden traits and aggregates.</p><span class="src">request_filter.process_reqspec</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">2</div><div class="step-body"><strong>Placement candidates</strong><p>GET /allocation_candidates returns every provider tree with room, plus a provider summary for each.</p><span class="src">report client.get_allocation_candidates</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">3</div><div class="step-body"><strong>Build host states</strong><p>Only the candidate provider UUIDs are loaded into in-memory HostState objects across enabled cells.</p><span class="src">host_manager.get_host_states_by_uuids</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">4</div><div class="step-body"><strong>Filters</strong><p>Each enabled filter is a pass/fail gate; the survivor list shrinks filter by filter.</p><span class="src">host_manager.get_filtered_hosts</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">5</div><div class="step-body"><strong>Weighers</strong><p>Survivors are scored, normalized, summed and sorted best-to-worst; the top subset is shuffled.</p><span class="src">host_manager.get_weighed_hosts</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">6</div><div class="step-body"><strong>Claim</strong><p>The first host whose PUT /allocations succeeds wins and is consumed locally for the next instance.</p><span class="src">utils.claim_resources</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">7</div><div class="step-body"><strong>Alternates</strong><p><code>_get_alternate_hosts</code> wraps each winner plus same-cell backups into Selection objects.</p><span class="src">manager._get_alternate_hosts</span></div></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 1 — CONDUCTOR HANDS OFF ════════════ -->
+  <section class="module" id="module-1" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">01</span>
+        <h1 class="module-title">Phase 1 — The conductor hands off</h1>
+        <p class="module-subtitle">The conductor does not pick hosts itself. It prepares the affinity state, then makes the single synchronous RPC <em>call</em> in the whole procedure.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The conductor calls the query client</h2>
+          <p><code>_schedule_instances</code> sets up the instance group, then calls <code>select_destinations</code> requesting objects and alternates. The result is a list of host lists, one per instance.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">conductor/manager.py</span><br>
+<span class="code-keyword">def</span> <span class="code-function">_schedule_instances</span>(<span class="code-keyword">self</span>, context, request_spec,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instance_uuids=<span class="code-keyword">None</span>, return_alternates=<span class="code-keyword">False</span>):<br>&nbsp;&nbsp;scheduler_utils.<span class="code-function">setup_instance_group</span>(context, request_spec)<br>&nbsp;&nbsp;<span class="code-keyword">with</span> timeutils.<span class="code-function">StopWatch</span>() <span class="code-keyword">as</span> timer:<br>&nbsp;&nbsp;&nbsp;&nbsp;host_lists = <span class="code-keyword">self</span>.query_client.<span class="code-function">select_destinations</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;context, request_spec, instance_uuids, return_objects=<span class="code-keyword">True</span>,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return_alternates=return_alternates)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Before scheduling, record the affinity group, then ask the scheduler for one ranked-and-claimed host per instance."</strong> <code>return_objects=True</code> asks for full <span class="term" data-definition="The scheduler's output object: service_host, nodename, cell_uuid, availability_zone, limits, the allocation_request JSON and its version. One primary per instance plus zero or more alternates.">Selection</span> objects and <code>return_alternates</code> asks for backup hosts too. <span class="file-ref">nova/conductor/manager.py ~938</span></div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">RPC version negotiation for select_destinations</h2>
+          <p>The RPC client sends version 4.5 (Selection objects + alternates). If the deployment can only do older versions it downgrades and drops parameters. It <strong>CALLs</strong> <code>select_destinations</code> with a long timeout and waits for the reply.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">scheduler/rpcapi.py</span><br>
+<span class="code-keyword">def</span> <span class="code-function">select_destinations</span>(<span class="code-keyword">self</span>, ctxt, spec_obj, instance_uuids,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;return_objects=<span class="code-keyword">False</span>, return_alternates=<span class="code-keyword">False</span>):<br>&nbsp;&nbsp;<span class="code-comment"># Modify the parameters if an older version is requested</span><br>&nbsp;&nbsp;version = <span class="code-string">'4.5'</span><br>&nbsp;&nbsp;msg_args = {<span class="code-string">'instance_uuids'</span>: instance_uuids,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">'spec_obj'</span>: spec_obj,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">'return_objects'</span>: return_objects,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">'return_alternates'</span>: return_alternates}
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Package the request spec and instance UUIDs, then send them to whatever scheduler picks up the topic."</strong> The thin <code>SchedulerQueryClient</code> (<span class="file-ref">nova/scheduler/client/query.py</span>) forwards to this RPC client. It defaults to the newest contract — Selection objects with alternates. <span class="file-ref">nova/scheduler/rpcapi.py ~132</span></div>
+          </div>
+          <div class="callout callout-accent">
+            <div class="callout-icon">📞</div>
+            <div class="callout-content">
+              <span class="callout-title">Exactly one blocking call</span>
+              <p>This conductor→scheduler hop is the <em>only</em> blocking RPC <code>CALL</code> in the procedure. Everything the scheduler then does is in-process Python plus REST to Placement. The conductor simply waits for the list of Selections.</p>
+            </div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">Did the request ever reach a scheduler?</span></div>
+            <div class="ops-check-body">
+              <span class="note"># the exact spec the conductor sent — frozen in the API DB, one row per instance</span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT created_at, spec FROM nova_api.request_specs WHERE instance_uuid='$UUID' \G</span><br>
+              <br>
+              <span class="note"># is a scheduler alive to answer the CALL at all?</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack compute service list --service nova-scheduler</span>  <span class="out">→ state <span class="hl">up</span></span><br>
+              <br>
+              <span class="note"># if the call never returns: MessagingTimeout in nova-conductor's log after long_rpc_timeout,</span><br>
+              <span class="note"># then 'Failed to schedule instances' and the boot is buried in cell0 — start the diagnosis there</span><br>
+              <span class="prompt">$ </span><span class="cmd">grep $UUID nova-conductor.log | grep -i 'schedul'</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 2 — REQUEST FILTERS ════════════ -->
+  <section class="module" id="module-2" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">02</span>
+        <h1 class="module-title">Phase 2 — Request filters mutate the spec</h1>
+        <p class="module-subtitle">On the scheduler side, before talking to Placement, the manager runs the pre-placement request filters. They do not drop hosts — they tighten the <span class="term" data-definition="The request object: flavor, image, num_instances, project/user, scheduler_hints, instance_group, requested_destination, force_hosts/nodes, ignore_hosts, requested_networks, and the trait sets root_required/root_forbidden that request filters mutate.">RequestSpec</span>.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Request filters run, then build the Placement query</h2>
+          <p><code>select_destinations</code> calls <code>process_reqspec</code> (only when this is not a rebuild), then <code>resources_from_request_spec</code>, then the Placement GET. A <code>RequestFilterFailed</code> becomes <code>NoValidHost</code>.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">scheduler/manager.py</span><br>
+<span class="code-keyword">if</span> <span class="code-keyword">not</span> is_rebuild:<br>&nbsp;&nbsp;<span class="code-keyword">try</span>:<br>&nbsp;&nbsp;&nbsp;&nbsp;request_filter.<span class="code-function">process_reqspec</span>(context, spec_obj)<br>&nbsp;&nbsp;<span class="code-keyword">except</span> exception.RequestFilterFailed <span class="code-keyword">as</span> e:<br>&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">raise</span> exception.<span class="code-function">NoValidHost</span>(reason=e.message)<br><br>&nbsp;&nbsp;resources = utils.<span class="code-function">resources_from_request_spec</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;context, spec_obj, <span class="code-keyword">self</span>.host_manager,<br>&nbsp;&nbsp;&nbsp;&nbsp;enable_pinning_translate=<span class="code-keyword">True</span>)<br>&nbsp;&nbsp;res = <span class="code-keyword">self</span>.placement_client.<span class="code-function">get_allocation_candidates</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;context, resources)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"First adjust the request, then translate it into a Placement query, then ask Placement for candidates."</strong> The adjustment might restrict to the tenant's aggregate or forbid disabled computes. If a request filter raises, there is no valid host before any host is even looked at. <span class="file-ref">nova/scheduler/manager.py ~186</span></div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The ordered request-filter chain</h2>
+          <p><code>ALL_REQUEST_FILTERS</code> is run in order by <code>process_reqspec</code>. Each is a small function that optionally tightens the request before it ever reaches Placement.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">scheduler/request_filter.py</span><br>
+ALL_REQUEST_FILTERS = [<br>&nbsp;&nbsp;require_tenant_aggregate,<br>&nbsp;&nbsp;map_az_to_placement_aggregate,<br>&nbsp;&nbsp;require_image_type_support,<br>&nbsp;&nbsp;compute_status_filter,<br>&nbsp;&nbsp;isolate_aggregates,<br>&nbsp;&nbsp;transform_image_metadata,<br>&nbsp;&nbsp;accelerators_filter,
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"A fixed, ordered list of small functions, each optionally tightening the request."</strong> Examples: <code>require_tenant_aggregate</code> (tenant isolation), <code>map_az_to_placement_aggregate</code> (AZ → aggregate), and <code>compute_status_filter</code> (always forbids disabled computes). <span class="file-ref">nova/scheduler/request_filter.py ~447</span></div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">compute_status_filter is mandatory</h2>
+          <p>This filter unconditionally adds <code>COMPUTE_STATUS_DISABLED</code> to the spec's forbidden traits, so disabled compute services are excluded by Placement — mirroring the in-process <code>ComputeFilter</code>.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">scheduler/request_filter.py</span><br>
+<span class="code-keyword">def</span> <span class="code-function">compute_status_filter</span>(ctxt, request_spec):<br>&nbsp;&nbsp;trait_name = os_traits.COMPUTE_STATUS_DISABLED<br>&nbsp;&nbsp;request_spec.root_forbidden.<span class="code-function">add</span>(trait_name)<br>&nbsp;&nbsp;LOG.<span class="code-function">debug</span>(<span class="code-string">'compute_status_filter request filter added forbidden '</span><br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">'trait %s'</span>, trait_name)<br>&nbsp;&nbsp;<span class="code-keyword">return</span> <span class="code-keyword">True</span>
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Hosts whose compute service is disabled carry a 'disabled' trait and are excluded by Placement before scheduling even sees them."</strong> This is why a disabled host never appears among the candidates. <span class="file-ref">nova/scheduler/request_filter.py ~242</span></div>
+          </div>
+          <div class="callout callout-info">
+            <div class="callout-icon">🧭</div>
+            <div class="callout-content">
+              <span class="callout-title">Pre-placement vs in-process</span>
+              <p>Request filters add <em>traits and aggregates to the spec</em> so Placement does the filtering. The in-process filters (Phase 6) drop <em>HostState objects</em> after Placement answers. Same idea — applied at two different points.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Build the Placement query — ResourceRequest</h2>
+          <p><code>resources_from_request_spec</code> turns the mutated RequestSpec into a <code>ResourceRequest</code>: resource amounts, required/forbidden traits, and aggregate <code>member_of</code> constraints. It honors a forced host by adding an <code>in_tree</code> constraint.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">scheduler/utils.py</span><br>
+<span class="code-keyword">if</span> target_host <span class="code-keyword">or</span> target_node:<br>&nbsp;&nbsp;nodes = host_manager.<span class="code-function">get_compute_nodes_by_host_or_node</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;ctxt, target_host, target_node, cell=target_cell)<br>&nbsp;&nbsp;<span class="code-keyword">if</span> <span class="code-keyword">not</span> nodes:<br>&nbsp;&nbsp;&nbsp;&nbsp;reason = (_(<span class="code-string">'No such host - host: %(host)s node: %(node)s '</span>) %<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;{<span class="code-string">'host'</span>: target_host, <span class="code-string">'node'</span>: target_node})<br>&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">raise</span> exception.<span class="code-function">NoValidHost</span>(reason=reason)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"If the user named a specific host or node, only candidates on that node are requested from Placement — or we fail fast if it doesn't exist."</strong> The matching compute-node UUID becomes an <code>in_tree</code> constraint so Placement only returns candidates rooted there. <span class="file-ref">nova/scheduler/utils.py ~715</span></div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Render the GET /allocation_candidates querystring</h2>
+          <p><code>to_querystring</code> builds <code>limit</code>, <code>group_policy</code>, <code>root_required</code> (required traits plus <code>!</code>forbidden), <code>same_subtree</code>, and per-group <code>resources[]</code>/<code>required[]</code>/<code>member_of[]</code> params.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">scheduler/utils.py</span><br>
+<span class="code-keyword">if</span> <span class="code-keyword">self</span>._root_required <span class="code-keyword">or</span> <span class="code-keyword">self</span>._root_forbidden:<br>&nbsp;&nbsp;vals = <span class="code-function">sorted</span>(<span class="code-keyword">self</span>._root_required) + [<span class="code-string">'!'</span> + t <span class="code-keyword">for</span> t <span class="code-keyword">in</span><br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-function">sorted</span>(<span class="code-keyword">self</span>._root_forbidden)]<br>&nbsp;&nbsp;qparams.<span class="code-function">append</span>((<span class="code-string">'root_required'</span>, <span class="code-string">','</span>.<span class="code-function">join</span>(vals)))<br><br><span class="code-keyword">for</span> group_suffixes <span class="code-keyword">in</span> <span class="code-keyword">self</span>._same_subtree:<br>&nbsp;&nbsp;qparams.<span class="code-function">append</span>((<span class="code-string">'same_subtree'</span>, <span class="code-string">','</span>.<span class="code-function">join</span>(<span class="code-function">sorted</span>(group_suffixes))))
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"The request becomes a URL query encoding exactly which resources, traits and aggregates a provider tree must satisfy."</strong> Forbidden traits are prefixed with <code>!</code>. This is the literal querystring sent to Placement. <span class="file-ref">nova/scheduler/utils.py ~541</span></div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">What did the request filters actually do — and is their ground truth right?</span></div>
+            <div class="ops-check-body">
+              <span class="note"># each request filter logs its action per request id (DEBUG on the scheduler)</span><br>
+              <span class="prompt">$ </span><span class="cmd">grep $REQ_ID nova-scheduler.log | grep request_filter</span><br>
+              <span class="out">require_tenant_aggregate … / compute_status_filter … added forbidden trait <span class="hl">COMPUTE_STATUS_DISABLED</span></span><br>
+              <br>
+              <span class="note"># the ground truth those filters rely on — nova aggregates mirrored into placement</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack aggregate show $AGG -c properties</span>  <span class="out">→ filter_tenant_id / availability_zone metadata</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider aggregate list $COMPUTE_RP_UUID</span>  <span class="out">→ is the host in the placement aggregate?</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider trait list $COMPUTE_RP_UUID | grep COMPUTE_STATUS</span>  <span class="out">→ disabled host?</span><br>
+              <br>
+              <span class="note"># classic trap: filter_tenant_id set on the nova aggregate but the placement mirror is stale →</span><br>
+              <span class="note"># the tenant's boots die with NoValidHost BEFORE any host filter ever runs</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 3 — ASK PLACEMENT ════════════ -->
+  <section class="module" id="module-3" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">03</span>
+        <h1 class="module-title">Phase 4 — Query Placement for candidates</h1>
+        <p class="module-subtitle">The report client issues a single REST <code>GET /allocation_candidates</code>. No candidates means <code>NoValidHost</code> immediately, before any filtering.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">GET /allocation_candidates</h2>
+          <p>The client builds the URL from the querystring and parses the 200 body into two structures plus the microversion used: the claimable <code>allocation_requests</code> and the <code>provider_summaries</code>.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">scheduler/client/report.py</span><br>
+version = SAME_SUBTREE_VERSION<br>
+qparams = resources.<span class="code-function">to_querystring</span>()<br>
+url = <span class="code-string">"/allocation_candidates?%s"</span> % qparams<br>
+resp = <span class="code-keyword">self</span>.<span class="code-function">get</span>(url, version=version,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;global_request_id=context.global_id)<br>
+<span class="code-keyword">if</span> resp.status_code == <span class="code-number">200</span>:<br>&nbsp;&nbsp;data = resp.<span class="code-function">json</span>()<br>&nbsp;&nbsp;<span class="code-keyword">return</span> (data[<span class="code-string">'allocation_requests'</span>], data[<span class="code-string">'provider_summaries'</span>],<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;version)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Ask Placement which provider trees can satisfy this request, and what each looks like."</strong> It returns the claimable requests plus a summary of each provider. If the user requested pinned CPUs, the manager runs a second VCPU-fallback query and merges both result sets. <span class="file-ref">nova/scheduler/client/report.py ~342</span></div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Index by provider UUID; fail fast if empty</h2>
+          <p>After merging any PCPU/VCPU fallback, the manager bails to <code>NoValidHost</code> if there are zero allocation requests, then builds a dict from RP UUID to its allocation requests for fast lookup at claim time.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">scheduler/manager.py</span><br>
+<span class="code-keyword">if</span> <span class="code-keyword">not</span> alloc_reqs:<br>&nbsp;&nbsp;LOG.<span class="code-function">info</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">"Got no allocation candidates from the Placement API. ..."</span>)<br>&nbsp;&nbsp;<span class="code-keyword">raise</span> exception.<span class="code-function">NoValidHost</span>(reason=<span class="code-string">""</span>)<br><br>alloc_reqs_by_rp_uuid = collections.<span class="code-function">defaultdict</span>(list)<br><span class="code-keyword">for</span> ar <span class="code-keyword">in</span> alloc_reqs:<br>&nbsp;&nbsp;<span class="code-keyword">for</span> rp_uuid <span class="code-keyword">in</span> ar[<span class="code-string">'allocations'</span>]:<br>&nbsp;&nbsp;&nbsp;&nbsp;alloc_reqs_by_rp_uuid[rp_uuid].<span class="code-function">append</span>(ar)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"No candidate providers means no valid host; otherwise organize the claimable payloads by the provider they target."</strong> This dict is what lets each HostState later pick up its matching allocation requests for the claim step. <span class="file-ref">nova/scheduler/manager.py ~237</span></div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">Replay the placement query yourself</span></div>
+            <div class="ops-check-body">
+              <span class="note"># would placement answer this flavor right now? dry-run the same query</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack allocation candidate list --resource VCPU=4 --resource MEMORY_MB=16384 --resource DISK_GB=30</span><br>
+              <span class="out">(add the flavor's resources:* extra specs — e.g. --resource CUSTOM_RESERVATION_…=1)</span><br>
+              <br>
+              <span class="note"># the fingerprint of an empty answer, in nova-scheduler.log:</span><br>
+              <span class="out">"<span class="hl">Got no allocation candidates from the Placement API</span>" → capacity/traits/aggregates, NOT filters</span><br>
+              <br>
+              <span class="note"># how much room a suspect host really has (mind allocation_ratio and reserved)</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider usage show $COMPUTE_RP_UUID</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider inventory list $COMPUTE_RP_UUID</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 4 — HOST STATES ════════════ -->
+  <section class="module" id="module-4" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">04</span>
+        <h1 class="module-title">Phase 5 — Build host states from candidates</h1>
+        <p class="module-subtitle">The candidate provider UUIDs restrict which compute nodes are loaded into mutable <span class="term" data-definition="A mutable per-host resource view: free_ram_mb, free_disk_mb, vcpus, pci_stats, numa_topology, aggregates, instances, num_io_ops, failed_builds, cell_uuid, and allocation_candidates. Filters and weighers read it; consume_from_request mutates it.">HostState</span> objects.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Restrict host states to candidate providers</h2>
+          <p>Only providers Placement returned are loaded. The keys of <code>provider_summaries</code> are the candidate compute-node UUIDs; an empty set yields no hosts (eventually <code>NoValidHost</code>).</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">scheduler/manager.py</span><br>
+<span class="code-keyword">def</span> <span class="code-function">_get_all_host_states</span>(<span class="code-keyword">self</span>, context, spec_obj, provider_summaries):<br>&nbsp;&nbsp;compute_uuids = <span class="code-keyword">None</span><br>&nbsp;&nbsp;<span class="code-keyword">if</span> provider_summaries <span class="code-keyword">is</span> <span class="code-keyword">not</span> <span class="code-keyword">None</span>:<br>&nbsp;&nbsp;&nbsp;&nbsp;compute_uuids = <span class="code-function">list</span>(provider_summaries.<span class="code-function">keys</span>())<br>&nbsp;&nbsp;<span class="code-keyword">return</span> <span class="code-keyword">self</span>.host_manager.<span class="code-function">get_host_states_by_uuids</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;context, compute_uuids, spec_obj)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Build in-memory host objects only for the compute nodes Placement said could fit."</strong> The HostManager scatter-gathers ComputeNode and Service records across enabled cells and produces a generator of HostState objects, each populated from its ComputeNode. <span class="file-ref">nova/scheduler/manager.py ~748</span></div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Attach allocation candidates to each host</h2>
+          <p><code>_schedule</code> wraps the HostState generator so each host gets a deep copy of its allocation requests (keyed earlier by RP UUID). This is what filters can inspect and what the claim step consumes.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">scheduler/manager.py</span><br>
+<span class="code-keyword">def</span> <span class="code-function">hosts_with_alloc_reqs</span>(hosts_gen):<br>&nbsp;&nbsp;<span class="code-keyword">for</span> host <span class="code-keyword">in</span> hosts_gen:<br>&nbsp;&nbsp;&nbsp;&nbsp;host.allocation_candidates = copy.<span class="code-function">deepcopy</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;alloc_reqs_by_rp_uuid[host.uuid])<br>&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">yield</span> host<br><br>hosts = <span class="code-keyword">self</span>.<span class="code-function">_get_all_host_states</span>(<br>&nbsp;&nbsp;elevated, spec_obj, provider_summaries)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Each host object is tagged with the exact Placement claim payloads that would work for it."</strong> The deep copy keeps per-instance state independent during a multi-create. <span class="file-ref">nova/scheduler/manager.py ~336</span></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 5 — FILTER & WEIGH ════════════ -->
+  <section class="module" id="module-5" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">05</span>
+        <h1 class="module-title">Phases 6 &amp; 7 — Filter, then weigh</h1>
+        <p class="module-subtitle">Per instance, <code>_get_sorted_hosts</code> first gates the hosts through the ordered filters, then scores and ranks the survivors with the weighers.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The pipeline order, so far</h2>
+          <p>Two stages, in this fixed order. Filters first (cheap pass/fail), then weighers (scoring) on whatever survives.</p>
+          <div class="state-track">
+            <span class="state-pill vm">request_filters</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill task">Placement candidates</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill task">host states</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill vm">filters</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill vm">weighers</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill task">claim</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill done">alternates</span>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Filter chain — each filter narrows the list</h2>
+          <p><code>get_filtered_objects</code> runs filters in order; <code>filter_all</code> yields the passing hosts; if a filter returns zero hosts it breaks and the request fails. Hosts pass through each filter like a sieve.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">filters.py</span><br>
+objs = filter_.<span class="code-function">filter_all</span>(list_objs, spec_obj)<br>
+<span class="code-keyword">if</span> objs <span class="code-keyword">is</span> <span class="code-keyword">None</span>:<br>&nbsp;&nbsp;LOG.<span class="code-function">debug</span>(<span class="code-string">"Filter %s says to stop filtering"</span>, cls_name)<br>&nbsp;&nbsp;<span class="code-keyword">return</span><br>
+list_objs = <span class="code-function">list</span>(objs)<br>
+end_count = <span class="code-function">len</span>(list_objs)<br>
+...<br><span class="code-keyword">else</span>:<br>&nbsp;&nbsp;LOG.<span class="code-function">info</span>(<span class="code-string">"Filter %s returned 0 hosts"</span>, cls_name)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"A filter that rejects everything ends the search."</strong> Before this runs, <code>get_filtered_hosts</code> also handles <code>ignore_hosts</code>/<code>force_hosts</code>/<code>force_nodes</code>/<code>requested_destination</code>. <span class="file-ref">nova/filters.py ~89</span></div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The default enabled_filters</h2>
+          <p>The shipped default ordered list. The advice is to place the most restrictive filters first for efficiency.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">conf/scheduler.py</span><br>
+default=[<br>&nbsp;&nbsp;<span class="code-string">"ComputeFilter"</span>,<br>&nbsp;&nbsp;<span class="code-string">"ComputeCapabilitiesFilter"</span>,<br>&nbsp;&nbsp;<span class="code-string">"ImagePropertiesFilter"</span>,<br>&nbsp;&nbsp;<span class="code-string">"ServerGroupAntiAffinityFilter"</span>,<br>&nbsp;&nbsp;<span class="code-string">"ServerGroupAffinityFilter"</span>,<br>],
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Out of the box the scheduler checks service liveness, flavor extra-specs, image compatibility, and server-group (anti-)affinity."</strong> Full details are in the reference module below. <span class="file-ref">nova/conf/scheduler.py ~317</span></div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Weigh: normalize, multiply, sum</h2>
+          <p><code>get_weighed_objects</code> normalizes each weigher's raw weights, multiplies by the weigher multiplier, accumulates onto each object, and returns descending-sorted <code>WeighedObjects</code>.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">weights.py</span><br>
+<span class="code-keyword">for</span> i, weight <span class="code-keyword">in</span> <span class="code-function">enumerate</span>(weights):<br>&nbsp;&nbsp;obj = weighed_objs[i]<br>&nbsp;&nbsp;multiplier = weigher.<span class="code-function">weight_multiplier</span>(obj.obj)<br>&nbsp;&nbsp;weigher_score = multiplier * weight<br>&nbsp;&nbsp;obj.weight += weigher_score<br>
+...<br>
+<span class="code-keyword">return</span> <span class="code-function">sorted</span>(weighed_objs, key=<span class="code-keyword">lambda</span> x: x.weight, reverse=<span class="code-keyword">True</span>)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Every host gets a combined score from all weighers; highest score wins."</strong> Each weigher's raw values are first mapped to 0..1 across the surviving set, then scaled by its multiplier and summed. <span class="file-ref">nova/weights.py ~157</span></div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">host_subset_size randomization</h2>
+          <p>After sorting, the top <code>host_subset_size</code> hosts are shuffled so the same host is not always chosen for identical requests.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">scheduler/manager.py</span><br>
+host_subset_size = CONF.filter_scheduler.host_subset_size<br>
+<span class="code-keyword">if</span> host_subset_size &lt; <span class="code-function">len</span>(weighed_hosts):<br>&nbsp;&nbsp;weighed_subset = weighed_hosts[<span class="code-number">0</span>:host_subset_size]<br>
+<span class="code-keyword">else</span>:<br>&nbsp;&nbsp;weighed_subset = weighed_hosts<br>
+random.<span class="code-function">shuffle</span>(weighed_subset)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"To avoid hammering one host, the best few are jumbled before the top one is picked."</strong> The default subset size is 1, so by default the single best host is chosen. <span class="file-ref">nova/scheduler/manager.py ~737</span></div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">Read the filter story for one boot — which gate zeroed the list?</span></div>
+            <div class="ops-check-body">
+              <span class="note"># the Nectar branch logs each filter's SURVIVING HOSTS at INFO (upstream logs only counts, at DEBUG)</span><br>
+              <span class="prompt">$ </span><span class="cmd">grep $UUID nova-scheduler.log | grep 'Filter '</span><br>
+              <span class="out">Filter ComputeFilter returned 5 hosts […]</span><br>
+              <span class="out">Filter AggregateInstanceExtraSpecsFilter returned 2 hosts […]</span><br>
+              <span class="out">Filter <span class="hl">NUMATopologyFilter returned 0 hosts</span>   <span class="note"># ← the culprit names itself</span></span><br>
+              <br>
+              <span class="note"># the final verdict line, plus the weighing order at DEBUG</span><br>
+              <span class="out">"Filtering removed all hosts …" / "Weighed [WeighedHost …]"</span><br>
+              <br>
+              <span class="note"># filter lines present = placement DID return candidates; the failure is host-side —</span><br>
+              <span class="note"># no filter lines at all = go back one module: placement returned nothing</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 6 — CLAIM & SELECT ════════════ -->
+  <section class="module" id="module-6" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">06</span>
+        <h1 class="module-title">Phase 8 — Claim, then build Selections</h1>
+        <p class="module-subtitle">Ranking is not commitment. The scheduler walks the sorted hosts and claims resources in Placement; the first claim that succeeds wins the host.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Claim the first candidate that succeeds</h2>
+          <p>For each sorted host, the manager tries the host's first allocation request. The first successful <code>PUT /allocations</code> wins and becomes <code>claimed_host</code>.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">scheduler/manager.py</span><br>
+alloc_req = host.allocation_candidates[<span class="code-number">0</span>]<br>
+<span class="code-keyword">if</span> utils.<span class="code-function">claim_resources</span>(<br>&nbsp;&nbsp;elevated, <span class="code-keyword">self</span>.placement_client, spec_obj, instance_uuid,<br>&nbsp;&nbsp;alloc_req,<br>&nbsp;&nbsp;allocation_request_version=allocation_request_version,<br>):<br>&nbsp;&nbsp;claimed_host = host<br>&nbsp;&nbsp;<span class="code-keyword">break</span>
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Walk the ranked hosts and grab resources in Placement on the first one that accepts the claim."</strong> Note it tries only the <em>first</em> allocation candidate per host (a TODO notes this); the loop moves to the next host on a conflict. <span class="file-ref">nova/scheduler/manager.py ~448</span></div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">PUT /allocations with generation-conflict handling</h2>
+          <p>The report client PUTs the allocation. A 204 means success. A <code>placement.concurrent_update</code> error is either a consumer-generation conflict (a hard <code>AllocationUpdateFailed</code>) or a provider-generation race (a <code>Retry</code> handled locally).</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">scheduler/client/report.py</span><br>
+<span class="code-keyword">if</span> r.status_code != <span class="code-number">204</span>:<br>&nbsp;&nbsp;err = r.<span class="code-function">json</span>()[<span class="code-string">'errors'</span>][<span class="code-number">0</span>]<br>&nbsp;&nbsp;<span class="code-keyword">if</span> err[<span class="code-string">'code'</span>] == <span class="code-string">'placement.concurrent_update'</span>:<br>&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">if</span> <span class="code-string">'consumer generation conflict'</span> <span class="code-keyword">in</span> err[<span class="code-string">'detail'</span>]:<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;...<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">raise</span> exception.<span class="code-function">AllocationUpdateFailed</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;consumer_uuid=consumer_uuid, error=reason)<br>&nbsp;&nbsp;&nbsp;&nbsp;...<br>&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">raise</span> <span class="code-function">Retry</span>(<span class="code-string">'claim_resources'</span>, reason)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"If two requests race for the same provider, Placement rejects one."</strong> A <span class="term" data-definition="Placement attaches a generation number to providers and consumers. If it changed between the GET and the PUT, the update is rejected with placement.concurrent_update — a provider race is retried, a consumer conflict is fatal.">generation conflict</span> on the provider is retried; a consumer conflict is a hard error. <span class="file-ref">nova/scheduler/client/report.py ~1671</span></div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Consume locally so the next instance sees the change</h2>
+          <p>After a successful claim, <code>_consume_selected_host</code> subtracts the instance's resources from the HostState and appends the host to the server group, so subsequent instances in a multi-create are scheduled against updated state.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">scheduler/manager.py</span><br>
+<span class="code-property">@staticmethod</span><br>
+<span class="code-keyword">def</span> <span class="code-function">_consume_selected_host</span>(selected_host, spec_obj, instance_uuid=<span class="code-keyword">None</span>):<br>&nbsp;&nbsp;LOG.<span class="code-function">debug</span>(<span class="code-string">"Selected host: %(host)s"</span>, {<span class="code-string">'host'</span>: selected_host},<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instance_uuid=instance_uuid)<br>&nbsp;&nbsp;selected_host.<span class="code-function">consume_from_request</span>(spec_obj)<br>&nbsp;&nbsp;<span class="code-keyword">if</span> spec_obj.instance_group <span class="code-keyword">is</span> <span class="code-keyword">not</span> <span class="code-keyword">None</span>:<br>&nbsp;&nbsp;&nbsp;&nbsp;spec_obj.instance_group.hosts.<span class="code-function">append</span>(selected_host.host)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Pretend the instance is already running on the chosen host so the next instance doesn't over-pack it."</strong> It decrements free RAM/disk, increments vcpus/io_ops/instances, and records the host for (anti-)affinity. <span class="file-ref">nova/scheduler/manager.py ~588</span></div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Build Selection objects — chosen + alternates</h2>
+          <p>After all instances are claimed (and <code>_ensure_sufficient_hosts</code> passes), <code>_get_alternate_hosts</code> turns each claimed host into a primary <span class="term" data-definition="The output object returned to the conductor: service_host, nodename, cell_uuid, availability_zone, limits, and the allocation_request JSON plus its version.">Selection</span> and adds same-cell, unclaimed hosts as <span class="term" data-definition="Same-cell, currently-unclaimed hosts attached after the primary, up to CONF.scheduler.max_attempts - 1. The cell conductor uses them to retry a failed build without re-scheduling.">alternates</span>, up to <code>max_attempts - 1</code>.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">scheduler/manager.py</span><br>
+selection = objects.Selection.<span class="code-function">from_host_state</span>(<br>&nbsp;&nbsp;selected_host, allocation_request=selected_alloc_req,<br>&nbsp;&nbsp;allocation_request_version=allocation_request_version)<br>
+selected_plus_alts = [selection]<br>
+cell_uuid = selected_host.cell_uuid
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Wrap the winner (and a few backups from the same cell) into the objects returned to the conductor."</strong> This list-of-lists of Selections is the value the RPC CALL returns. <span class="file-ref">nova/scheduler/manager.py ~647</span></div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">The claim is visible before the VM even starts building</span></div>
+            <div class="ops-check-body">
+              <span class="note"># written by the SCHEDULER at claim time — present while the build is still in flight</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider allocation show $UUID</span><br>
+              <span class="out">| $RP_UUID (the winning node) | {'VCPU': 4, 'MEMORY_MB': 16384, 'DISK_GB': 30} |</span><br>
+              <br>
+              <span class="note"># claim races leave 'placement.concurrent_update' in the placement API log —</span><br>
+              <span class="note"># provider-generation races are retried; a consumer conflict is fatal</span><br>
+              <span class="note"># (AllocationUpdateFailed in nova-scheduler.log)</span><br>
+              <br>
+              <span class="note"># instance ended ERROR but the allocation is still there → the build failed after the claim;</span><br>
+              <span class="note"># find and fix leaks:</span><br>
+              <span class="prompt">$ </span><span class="cmd">nova-manage placement audit --verbose</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 7 — FILTER & WEIGHER REFERENCE ════════════ -->
+  <section class="module" id="module-7" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">07</span>
+        <h1 class="module-title">Filter &amp; weigher reference</h1>
+        <p class="module-subtitle">The default gates and scorers, each with what it checks or optimizes. Filters decide <em>whether</em> a host qualifies; weighers decide <em>how good</em> it is.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Default enabled filters (run in order)</h2>
+          <p>These ship enabled out of the box, run in this order, in <span class="file-ref">nova/scheduler/filters/</span>.</p>
+          <div class="step-cards stagger-children">
+            <div class="step-card animate-in"><div class="step-num">1</div><div class="step-body"><strong>ComputeFilter</strong><p>Passes only hosts whose compute service is enabled and up (alive). <code>RUN_ON_REBUILD = False</code>.</p><span class="src">compute_filter.py</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">2</div><div class="step-body"><strong>ComputeCapabilitiesFilter</strong><p>Host capabilities must satisfy the flavor's <code>capabilities:</code>-namespaced extra specs (<code>_satisfies_extra_specs</code>).</p><span class="src">compute_capabilities_filter.py</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">3</div><div class="step-body"><strong>ImagePropertiesFilter</strong><p>Host's <code>supported_instances</code> (architecture, hypervisor type, vm_mode) must match the image's <code>hw_architecture</code>/<code>img_hv_type</code>/<code>hw_vm_mode</code>.</p><span class="src">image_props_filter.py</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">4</div><div class="step-body"><strong>ServerGroupAntiAffinityFilter</strong><p>When the group policy is <code>anti-affinity</code>, rejects hosts already running a group member (honoring max_server_per_host).</p><span class="src">affinity_filter.py</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">5</div><div class="step-body"><strong>ServerGroupAffinityFilter</strong><p>When the group policy is <code>affinity</code>, keeps only hosts already hosting group members.</p><span class="src">affinity_filter.py</span></div></div>
+          </div>
+          <div class="callout callout-info">
+            <div class="callout-icon">🧰</div>
+            <div class="callout-content">
+              <span class="callout-title">Other available filters (not default)</span>
+              <p>NUMATopologyFilter, PciPassthroughFilter, AggregateImagePropertiesIsolation, AggregateInstanceExtraSpecsFilter, NectarAggregateMultiTenancyIsolation, NumInstancesFilter, IoOpsFilter, IsolatedHostsFilter, JsonFilter, MetricsFilter, AggregateTypeAffinityFilter, AllHostsFilter, ProjectTagsFilter, RestrictedZoneFilter.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Default weighers (all loaded)</h2>
+          <p>Each computes a raw weight per host; values are normalized to 0..1 across survivors, scaled by the weigher's multiplier, and summed. From <span class="file-ref">nova/scheduler/weights/</span>.</p>
+          <div class="pattern-cards stagger-children">
+            <div class="pattern-card animate-in"><div class="pattern-icon">🧠</div><div class="pattern-title">RAMWeigher</div><p class="pattern-desc">Returns <code>free_ram_mb</code>; positive multiplier means spread (default 1.0). <span class="src">ram.py</span></p></div>
+            <div class="pattern-card animate-in"><div class="pattern-icon">⚙️</div><div class="pattern-title">CPUWeigher</div><p class="pattern-desc">Based on free vCPUs; positive multiplier means spread. <span class="src">cpu.py</span></p></div>
+            <div class="pattern-card animate-in"><div class="pattern-icon">💽</div><div class="pattern-title">DiskWeigher</div><p class="pattern-desc">Based on free disk; positive multiplier means spread. <span class="src">disk.py</span></p></div>
+            <div class="pattern-card animate-in"><div class="pattern-icon">🌀</div><div class="pattern-title">IoOpsWeigher</div><p class="pattern-desc">Weighs by <code>num_io_ops</code>; default multiplier is negative to avoid busy hosts. <span class="src">io_ops.py</span></p></div>
+            <div class="pattern-card animate-in"><div class="pattern-icon">🚧</div><div class="pattern-title">BuildFailureWeigher</div><p class="pattern-desc">Returns <code>failed_builds</code>; multiplier is negated, so hosts with recent build failures are penalized. <span class="src">compute.py</span></p></div>
+            <div class="pattern-card animate-in"><div class="pattern-icon">🔢</div><div class="pattern-title">HypervisorVersionWeigher</div><p class="pattern-desc">Prefers higher hypervisor versions. <span class="src">hypervisor_version.py</span></p></div>
+            <div class="pattern-card animate-in"><div class="pattern-icon">🔌</div><div class="pattern-title">PCIWeigher</div><p class="pattern-desc">Biases PCI-device requests toward or away from PCI-heavy hosts. <span class="src">pci.py</span></p></div>
+            <div class="pattern-card animate-in"><div class="pattern-icon">🧲</div><div class="pattern-title">ServerGroup Soft (Anti)Affinity</div><p class="pattern-desc">Soft, best-effort (anti-)affinity preferences. <span class="src">affinity.py</span></p></div>
+            <div class="pattern-card animate-in"><div class="pattern-icon">🏠</div><div class="pattern-title">CrossCellWeigher</div><p class="pattern-desc">Prefers (or avoids) hosts in the instance's current cell for moves. <span class="src">cross_cell.py</span></p></div>
+            <div class="pattern-card animate-in"><div class="pattern-icon">📈</div><div class="pattern-title">MetricsWeigher</div><p class="pattern-desc">Weighs by configured compute metrics. <span class="src">metrics.py</span></p></div>
+            <div class="pattern-card animate-in"><div class="pattern-icon">🧮</div><div class="pattern-title">NumInstancesWeigher</div><p class="pattern-desc">Weighs by the instance count on the host. <span class="src">num_instances.py</span></p></div>
+          </div>
+          <div class="callout callout-accent">
+            <div class="callout-icon">📐</div>
+            <div class="callout-content">
+              <span class="callout-title">Normalization</span>
+              <p>In <code>nova/weights.py</code> <code>normalize</code>, each weigher's raw values map to 0..1 across the surviving set (all-equal ⇒ all 0), then <code>score = multiplier * normalized_weight</code> is summed across weighers.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 8 — AGGREGATE ISOLATION ════════════ -->
+  <section class="module" id="module-aggregates" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">08</span>
+        <h1 class="module-title">Aggregate isolation — who is confined to whom?</h1>
+        <p class="module-subtitle">Filters and weighers decide <em>which surviving host wins</em>. But several aggregate-driven filters decide <em>which hosts are even eligible</em> for a given flavor, image, or project. Each enforces only <strong>one direction</strong>, and the direction depends entirely on which collection the filter loops over.</p>
+      </header>
+
+      <div class="screen">
+        <p class="lead animate-in">Read every relationship as a single arrow: <strong>A &rarr; B</strong> means "A may only be placed on B". A "reserved" host is really two arrows pointing at each other.</p>
+
+        <div class="callout callout-accent animate-in">
+          <div class="callout-icon">&#129518;</div>
+          <div class="callout-content">
+            <span class="callout-title">The deciding question: what does the filter loop over?</span>
+            <p>If it loops over the <strong>request</strong> (flavor extra_specs / image traits), the request becomes a demand &mdash; that confines the workload to matching hosts. If it loops over the <strong>host's aggregate metadata</strong>, the host becomes the gate &mdash; that reserves the host. Same data, opposite direction.</p>
+          </div>
+        </div>
+
+        <h2 class="screen-heading animate-in">The routing board &mdash; who lands where?</h2>
+        <p class="animate-in">Pick a filter below. Green solid = the boot is allowed there; red dashed = blocked. The matrix gives the exact reason per cell.</p>
+
+    <div class="board animate-in">
+      <svg class="board-svg" viewBox="0 0 1000 440" id="board" role="img" aria-label="Routing board: subjects to aggregate host groups">
+        <defs>
+          <marker id="arrow-allow" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L7,3 L0,6 Z" fill="#2D8B55"/></marker>
+        </defs>
+
+        <!-- direct routes are perfectly horizontal; crossing routes are symmetric curves -->
+        <path id="eAA" class="route allow" d="M280,118 L700,118" marker-end="url(#arrow-allow)"></path>
+        <path id="eAB" class="route allow" d="M280,148 C470,148 510,312 700,312" marker-end="url(#arrow-allow)"></path>
+        <path id="eBA" class="route allow" d="M280,312 C470,312 510,148 700,148" marker-end="url(#arrow-allow)"></path>
+        <path id="eBB" class="route allow" d="M280,342 L700,342" marker-end="url(#arrow-allow)"></path>
+        <!-- third subject's routes (image filter only) -->
+        <path id="eCA" class="route allow svg-hidden" d="M280,222 C470,222 540,165 700,165" marker-end="url(#arrow-allow)"></path>
+        <path id="eCB" class="route allow svg-hidden" d="M280,250 C470,250 540,300 700,300" marker-end="url(#arrow-allow)"></path>
+
+        <!-- subject A (has the property) -->
+        <g>
+          <rect class="bnode subj has" x="40" y="80" width="240" height="100" rx="14"></rect>
+          <text class="bnode-title" id="subjA-title" x="160" y="116" text-anchor="middle">Flavor A</text>
+          <text class="bnode-sub"   id="subjA-sub"   x="160" y="137" text-anchor="middle">has extra_spec</text>
+          <text class="bnode-mono"  id="subjA-meta"  x="160" y="159" text-anchor="middle">special-hw=true</text>
+        </g>
+        <!-- subject C (middle) — image filter only: the conflicting-value case -->
+        <g id="grpC" class="svg-hidden">
+          <rect class="bnode subj has" x="40" y="198" width="240" height="74" rx="14"></rect>
+          <text class="bnode-title" id="subjC-title" x="160" y="228" text-anchor="middle">Image 2</text>
+          <text class="bnode-mono"  id="subjC-sub"   x="160" y="250" text-anchor="middle">license=linux</text>
+        </g>
+        <!-- subject B (no property) -->
+        <g>
+          <rect class="bnode subj plain" x="40" y="280" width="240" height="100" rx="14"></rect>
+          <text class="bnode-title" id="subjB-title" x="160" y="324" text-anchor="middle">Flavor B</text>
+          <text class="bnode-sub"   id="subjB-sub"   x="160" y="346" text-anchor="middle">(no extra_spec)</text>
+        </g>
+        <!-- aggregate A (reserved) -->
+        <g>
+          <rect class="bnode agg has" x="700" y="66" width="280" height="138" rx="16"></rect>
+          <text class="bnode-title" x="840" y="96" text-anchor="middle">Aggregate A</text>
+          <text class="bnode-mono"  id="aggA-meta" x="840" y="120" text-anchor="middle">special-hw=true</text>
+          <text class="bnode-sub"   x="840" y="174" text-anchor="middle">hA1 &middot; hA2</text>
+        </g>
+        <!-- aggregate B (allow-all) -->
+        <g>
+          <rect class="bnode agg plain" x="700" y="270" width="280" height="120" rx="16"></rect>
+          <text class="bnode-title" x="840" y="312" text-anchor="middle">Aggregate B</text>
+          <text class="bnode-sub"   x="840" y="336" text-anchor="middle">(no metadata &middot; allow-all)</text>
+          <text class="bnode-sub"   x="840" y="362" text-anchor="middle">hB1 &middot; hB2</text>
+        </g>
+      </svg>
+
+      <div class="filter-groups">
+        <div class="filter-group">
+          <span class="filter-cat">Flavor &harr; host</span>
+          <button class="filter-btn active" data-key="extraspecs">AggregateInstanceExtraSpecsFilter</button>
+          <button class="filter-btn" data-key="typeaffinity">AggregateTypeAffinityFilter</button>
+          <button class="filter-btn" data-key="flavorcombined">Both combined</button>
+        </div>
+        <div class="filter-group">
+          <span class="filter-cat">Image &harr; host</span>
+          <button class="filter-btn" data-key="aggimage">AggregateImagePropertiesIsolation</button>
+        </div>
+        <div class="filter-group">
+          <span class="filter-cat">Project &harr; host</span>
+          <button class="filter-btn" data-key="reqtenant">Tenant Isolation with Placement</button>
+          <button class="filter-btn" data-key="multitenancy">NectarAggregateMultiTenancyIsolation</button>
+          <button class="filter-btn" data-key="projectcombined">Both combined</button>
+        </div>
+        <div class="filter-group">
+          <span class="filter-cat">Flavor / Image (traits)</span>
+          <button class="filter-btn" data-key="isolated">Filtering hosts by isolating aggregates</button>
+        </div>
+      </div>
+
+      <div class="board-note" id="board-note"></div>
+      <div class="board-summary" id="board-summary"></div>
+
+      <table class="matrix">
+        <thead>
+          <tr><th>boot &darr; &nbsp; target &rarr;</th><th>Aggregate A (reserved)</th><th>Aggregate B (allow-all)</th></tr>
+        </thead>
+        <tbody>
+          <tr><th id="row-a-label">Subject A</th><td class="cell" id="m-eAA"></td><td class="cell" id="m-eAB"></td></tr>
+          <tr id="rowC" class="svg-hidden"><th id="row-c-label">Subject C</th><td class="cell" id="m-eCA"></td><td class="cell" id="m-eCB"></td></tr>
+          <tr><th id="row-b-label">Subject B</th><td class="cell" id="m-eBA"></td><td class="cell" id="m-eBB"></td></tr>
+        </tbody>
+      </table>
+
+      <div class="board-legend">
+        <span><i style="background:#2D8B55"></i> allowed (lands here)</span>
+        <span><i style="background:#C93B3B"></i> blocked (rejected)</span>
+        <span>A = subject with the property/trait/tenant &nbsp; B = without</span>
+      </div>
+    </div>
+
+        <div class="callout callout-info animate-in">
+          <div class="callout-icon">&#128161;</div>
+          <div class="callout-content">
+            <span class="callout-title">Notice the pattern</span>
+            <p>Flavor and Project each have a <em>matched pair</em> of opposite-direction filters &mdash; combine them for a two-way lock with plain filters (try "Both combined" on the board). Image has no such pair: its only plain filter is conflict-only, enforcing nothing hard. That gap is why image isolation needs traits (bug 1677217).</p>
+          </div>
+        </div>
+
+        <h2 class="screen-heading animate-in">Why the image filter does not mirror the flavor filter</h2>
+        <div class="translation-block animate-in">
+          <div class="translation-code"><span class="translation-label">flavor &mdash; confines</span>
+<span class="code-line"><span class="code-comment"># aggregate_instance_extra_specs.py:52</span></span>
+<span class="code-line"><span class="code-keyword">for</span> key, req <span class="code-keyword">in</span> flavor.extra_specs.items():</span>
+<span class="code-line">    vals = metadata.get(key)</span>
+<span class="code-line">    <span class="code-keyword">if not</span> vals: <span class="code-keyword">return</span> <span class="code-keyword">False</span></span>
+<span class="code-line"></span>
+<span class="code-line"><span class="code-comment"># image — conflict only</span></span>
+<span class="code-line"><span class="code-comment"># aggregate_image_properties_isolation.py:48</span></span>
+<span class="code-line"><span class="code-keyword">for</span> key, options <span class="code-keyword">in</span> metadata.items():</span>
+<span class="code-line">    prop = image_props.get(key)</span>
+<span class="code-line">    <span class="code-keyword">if</span> prop <span class="code-keyword">and</span> str(prop) <span class="code-keyword">not in</span> options:</span>
+<span class="code-line">        <span class="code-keyword">return</span> <span class="code-keyword">False</span></span>
+          </div>
+          <div class="translation-english"><span class="translation-label">in plain words</span>
+            <p>The flavor filter loops the <strong>flavor</strong>, so each spec is a demand &mdash; a host lacking the key fails, and the flavor is confined.</p>
+            <p>The image filter loops the <strong>host's</strong> metadata, so the image property is passive: it only fails on an active value conflict. A missing property never rejects, and an untagged host has nothing to check &mdash; so the image is <strong>not</strong> confined. That is the asymmetry.</p>
+          </div>
+        </div>
+
+        <h2 class="screen-heading animate-in">Decision table</h2>
+        <table class="cmp-table animate-in">
+          <thead><tr><th>Goal</th><th>Use</th><th>Image?</th><th>[scheduler] toggle?</th></tr></thead>
+          <tbody>
+            <tr><td>flavor + image &harr; host (bidirectional)</td><td><code>isolated_aggregate_filtering</code> (traits)</td><td class="yes">Yes</td><td>Yes &mdash; <code>enable_isolated_aggregate_filtering</code></td></tr>
+            <tr><td>flavor &harr; host, no toggle</td><td>ExtraSpecs + TypeAffinity</td><td class="no">No</td><td>No (both in <code>enabled_filters</code>)</td></tr>
+            <tr><td>project &harr; host</td><td>require_tenant_aggregate + NectarAggregateMultiTenancyIsolation</td><td>n/a</td><td>Yes &mdash; <code>limit_tenants_to_placement_aggregate</code></td></tr>
+            <tr><td>image &harr; host (beyond conflict)</td><td class="weak">only <code>isolated_aggregate_filtering</code></td><td class="yes">Yes</td><td>Yes</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 9 — FULL JOURNEY ════════════ -->
+  <section class="module" id="module-8" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">09</span>
+        <h1 class="module-title">The full journey, animated</h1>
+        <p class="module-subtitle">Press <strong>Next step</strong> to watch the scheduling procedure run end to end. Notice the single blocking RPC <strong>CALL</strong> (conductor → scheduler); everything else is in-process Python or REST to Placement.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <div class="flow-animation" id="sched-flow" data-steps='[
+            {"highlight":"conductor","label":"1. [CALL] _schedule_instances calls query_client.select_destinations (return_objects, return_alternates)."},
+            {"from":"conductor","to":"scheduler","packet":true,"highlight":"scheduler","label":"2. [CALL] SchedulerAPI.select_destinations sends a v4.5 RPC CALL with spec_obj + instance_uuids — the one blocking call."},
+            {"from":"scheduler","to":"reqfilter","packet":true,"highlight":"reqfilter","label":"3. [LIBRARY] select_destinations runs request_filter.process_reqspec (skipped on rebuild)."},
+            {"highlight":"reqfilter","label":"4. [LIBRARY] each filter in ALL_REQUEST_FILTERS mutates the spec: tenant aggregate, AZ, forbidden COMPUTE_STATUS_DISABLED, image traits."},
+            {"highlight":"scheduler","label":"5. [LIBRARY] resources_from_request_spec builds a ResourceRequest and its querystring."},
+            {"from":"scheduler","to":"placement","packet":true,"highlight":"placement","label":"6. [REST] get_allocation_candidates: GET /allocation_candidates."},
+            {"from":"placement","to":"scheduler","packet":true,"highlight":"placement","label":"7. [REST] Placement returns allocation_requests + provider_summaries (+ microversion)."},
+            {"from":"scheduler","to":"placement","packet":true,"highlight":"placement","label":"8. [REST] optional VCPU fallback GET when PCPUs were requested; merge results."},
+            {"highlight":"scheduler","label":"9. [LIBRARY] if no candidates, raise NoValidHost; else index alloc_reqs by RP UUID."},
+            {"from":"scheduler","to":"hostmanager","packet":true,"highlight":"hostmanager","label":"10. [CALL] _get_all_host_states → get_host_states_by_uuids (restricted to candidate UUIDs)."},
+            {"highlight":"hostmanager","label":"11. [LIBRARY] scatter-gather ComputeNode/Service across cells; build HostState objects."},
+            {"highlight":"scheduler","label":"12. [LIBRARY] wrap the generator so each HostState carries its allocation_candidates."},
+            {"from":"scheduler","to":"filters","packet":true,"highlight":"filters","label":"13. [CALL] per instance, _get_sorted_hosts → get_filtered_hosts."},
+            {"highlight":"filters","label":"14. [LIBRARY] get_filtered_objects runs ComputeFilter, ComputeCapabilitiesFilter, ImagePropertiesFilter, ServerGroupAntiAffinity/Affinity in order."},
+            {"from":"filters","to":"weighers","packet":true,"highlight":"weighers","label":"15. [CALL] get_weighed_hosts on the survivors."},
+            {"highlight":"weighers","label":"16. [LIBRARY] normalize, multiply, sum; sort descending; shuffle the host_subset_size top."},
+            {"highlight":"scheduler","label":"17. [LIBRARY] pick host.allocation_candidates[0] of the best host."},
+            {"from":"scheduler","to":"placement","packet":true,"highlight":"placement","label":"18. [REST] claim_resources: PUT /allocations/{instance_uuid}."},
+            {"from":"placement","to":"scheduler","packet":true,"highlight":"placement","label":"19. [REST] 204 success, or concurrent_update (Retry / AllocationUpdateFailed)."},
+            {"from":"scheduler","to":"hostmanager","packet":true,"highlight":"scheduler","label":"20. [LIBRARY] _consume_selected_host → consume_from_request updates the HostState for the next instance."},
+            {"highlight":"scheduler","label":"21. [LIBRARY] _ensure_sufficient_hosts; if short, _cleanup_allocations then NoValidHost."},
+            {"highlight":"scheduler","label":"22. [LIBRARY] _get_alternate_hosts builds Selection lists (primary + same-cell alternates up to max_attempts-1)."},
+            {"from":"scheduler","to":"conductor","packet":true,"highlight":"conductor","label":"23. [CALL] return the list-of-lists of Selection objects from the RPC CALL."}
+          ]'>
+            <div class="flow-actors">
+              <div class="flow-actor active" id="flow-conductor"><div class="flow-actor-icon">CO</div><span>conductor</span></div>
+              <div class="flow-actor" id="flow-scheduler"><div class="flow-actor-icon">SC</div><span>scheduler</span></div>
+              <div class="flow-actor" id="flow-reqfilter"><div class="flow-actor-icon">RF</div><span>reqfilter</span></div>
+              <div class="flow-actor" id="flow-placement"><div class="flow-actor-icon">PL</div><span>placement</span></div>
+              <div class="flow-actor" id="flow-hostmanager"><div class="flow-actor-icon">HM</div><span>hostmanager</span></div>
+              <div class="flow-actor" id="flow-filters"><div class="flow-actor-icon">FI</div><span>filters</span></div>
+              <div class="flow-actor" id="flow-weighers"><div class="flow-actor-icon">WE</div><span>weighers</span></div>
+            </div>
+            <div class="flow-packet"></div>
+            <div class="flow-step-label">Click "Next step" to begin the journey</div>
+            <div class="flow-controls">
+              <button class="btn btn-primary flow-next-btn">Next step →</button>
+              <button class="btn flow-reset-btn">Reset</button>
+              <span class="flow-progress">Step 0 / 23</span>
+            </div>
+          </div>
+          <div class="callout callout-accent">
+            <div class="callout-icon">🔎</div>
+            <div class="callout-content">
+              <span class="callout-title">One blocking call, all the rest in-process or REST</span>
+              <p>There is exactly <em>one</em> blocking RPC <code>CALL</code> in the procedure: conductor → scheduler (steps 1–2), with its reply at step 23. Between them the scheduler runs in-process Python plus a handful of REST round-trips to Placement. That's what keeps scheduling fast and scalable.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 9 — FAILURES ════════════ -->
+  <section class="module" id="module-9" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">10</span>
+        <h1 class="module-title">When it goes wrong</h1>
+        <p class="module-subtitle">The procedure has a clear contract for failure: either there is no host (NoValidHost), or a claim races (retry or hard fail), and any partial claims are rolled back.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">NoValidHost — no candidates</h2>
+          <p>Placement returns zero <code>allocation_requests</code>, or a request filter raised <code>RequestFilterFailed</code>. The manager raises <code>NoValidHost</code> <em>before</em> any filtering or claiming.</p>
+          <div class="step-cards stagger-children">
+            <div class="step-card animate-in"><div class="step-num">A</div><div class="step-body"><strong>Request filter rejected the spec</strong><p>A <code>RequestFilterFailed</code> is converted straight to <code>NoValidHost</code> before the Placement query.</p><span class="src">nova/scheduler/manager.py ~190</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">B</div><div class="step-body"><strong>Placement returned nothing</strong><p>If <code>alloc_reqs</code> is empty, <code>NoValidHost</code> is raised immediately — no host could fit the resources/traits.</p><span class="src">nova/scheduler/manager.py ~243</span></div></div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">NoValidHost — filters or claims exhausted</h2>
+          <p>Filters remove every host, or no host's claim succeeds for an instance. <code>_ensure_sufficient_hosts</code> finds fewer claimed hosts than required, calls <code>_cleanup_allocations</code> to roll back prior claims, and raises <code>NoValidHost</code>.</p>
+          <div class="callout callout-warning">
+            <div class="callout-icon">↩️</div>
+            <div class="callout-content">
+              <span class="callout-title">Allocations are rolled back</span>
+              <p>If a multi-create gets partway — say two of three instances claimed a host — and then runs out of hosts, the scheduler does not leave dangling reservations. <code>_cleanup_allocations</code> releases the already-claimed allocations before raising. <span class="file-ref">nova/scheduler/manager.py ~502</span></p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Claim conflict — retry vs hard fail</h2>
+          <p>When the <code>PUT /allocations</code> returns <code>placement.concurrent_update</code>, the report client splits the two cases.</p>
+          <div class="step-cards stagger-children">
+            <div class="step-card animate-in"><div class="step-num">🔁</div><div class="step-body"><strong>Provider generation race → Retry</strong><p>Two requests raced for the same provider; the loser's generation changed. The client raises <code>Retry</code> and the claim is retried locally against fresh state.</p><span class="src">nova/scheduler/client/report.py ~1688</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">❌</div><div class="step-body"><strong>Consumer generation conflict → hard fail</strong><p>The consumer's generation changed between the GET and the PUT. The instance is in an inconsistent state, so <code>AllocationUpdateFailed</code> is treated as a hard error and propagated.</p><span class="src">nova/scheduler/client/report.py ~1681</span></div></div>
+          </div>
+          <div class="callout callout-info">
+            <div class="callout-icon">🧷</div>
+            <div class="callout-content">
+              <span class="callout-title">Why a provider race is safe to retry</span>
+              <p>A provider-generation race just means someone else changed that provider's inventory; re-reading and re-claiming is harmless. A consumer-generation conflict means <em>this instance's own</em> allocations changed unexpectedly — that's not safe to silently retry.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 10 — QUIZ ════════════ -->
+  <section class="module" id="module-10" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">11</span>
+        <h1 class="module-title">Check yourself</h1>
+        <p class="module-subtitle">Three questions and a matching exercise. If these click, you understand how the scheduler picks a host.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Quiz</h2>
+          <div class="quiz-container" id="quiz1">
+            <div class="quiz-question-block" data-correct="b"
+                 data-explanation-right="request_filter.process_reqspec runs ALL_REQUEST_FILTERS (require_tenant_aggregate, map_az_to_placement_aggregate, compute_status_filter, ...) which add traits/aggregates to the spec before get_allocation_candidates."
+                 data-explanation-wrong="These are pre-placement mutations, not in-process HostState filters and not database logic.">
+              <div class="quiz-question">Where are tenant-isolation, AZ-to-aggregate, and forbidden-disabled-trait constraints applied?</div>
+              <div class="quiz-options">
+                <button class="quiz-option" data-value="a" onclick="selectOption(this)"><span class="quiz-option-radio"></span>In the in-process scheduler filters after Placement</button>
+                <button class="quiz-option" data-value="b" onclick="selectOption(this)"><span class="quiz-option-radio"></span>As request filters that mutate the RequestSpec before the Placement query</button>
+                <button class="quiz-option" data-value="c" onclick="selectOption(this)"><span class="quiz-option-radio"></span>Inside Placement's database triggers</button>
+              </div>
+              <div class="quiz-feedback"></div>
+            </div>
+
+            <div class="quiz-question-block" data-correct="b"
+                 data-explanation-right="The loop tries alloc_req = host.allocation_candidates[0] and stops at the first host whose claim_resources (PUT /allocations) returns success."
+                 data-explanation-wrong="There is no parallel or random claim; a TODO notes only the first candidate is attempted today.">
+              <div class="quiz-question">When the scheduler claims resources, which allocation request does it try for a given host?</div>
+              <div class="quiz-options">
+                <button class="quiz-option" data-value="a" onclick="selectOption(this)"><span class="quiz-option-radio"></span>All allocation requests in parallel</button>
+                <button class="quiz-option" data-value="b" onclick="selectOption(this)"><span class="quiz-option-radio"></span>The first allocation candidate on that HostState (host.allocation_candidates[0])</button>
+                <button class="quiz-option" data-value="c" onclick="selectOption(this)"><span class="quiz-option-radio"></span>A randomly chosen candidate</button>
+              </div>
+              <div class="quiz-feedback"></div>
+            </div>
+
+            <div class="quiz-question-block" data-correct="b"
+                 data-explanation-right="It calls consume_from_request (decrementing free RAM/disk, incrementing vcpus/io_ops/instances) and appends the host to the server group for (anti-)affinity on later instances."
+                 data-explanation-wrong="It does not write to the DB or re-query Placement; the Placement claim already happened in the preceding step.">
+              <div class="quiz-question">What does <code>_consume_selected_host</code> accomplish during a multi-create request?</div>
+              <div class="quiz-options">
+                <button class="quiz-option" data-value="a" onclick="selectOption(this)"><span class="quiz-option-radio"></span>It persists the instance to the database</button>
+                <button class="quiz-option" data-value="b" onclick="selectOption(this)"><span class="quiz-option-radio"></span>It virtually consumes the host's resources locally so the next instance is scheduled against updated state</button>
+                <button class="quiz-option" data-value="c" onclick="selectOption(this)"><span class="quiz-option-radio"></span>It calls Placement again to double-check inventory</button>
+              </div>
+              <div class="quiz-feedback"></div>
+            </div>
+
+            <button class="quiz-check-btn" onclick="checkQuiz('quiz1')">Check answers</button>
+            <button class="quiz-reset-btn" onclick="resetQuiz('quiz1')">Reset</button>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Match the function to what it does</h2>
+          <p>Drag each function onto the job it performs in the scheduling procedure.</p>
+          <div class="dnd-container" id="match1">
+            <div class="dnd-chips">
+              <div class="dnd-chip" draggable="true" data-answer="getcand">get_allocation_candidates</div>
+              <div class="dnd-chip" draggable="true" data-answer="reqspec">process_reqspec</div>
+              <div class="dnd-chip" draggable="true" data-answer="filtered">get_filtered_hosts</div>
+              <div class="dnd-chip" draggable="true" data-answer="weighed">get_weighed_hosts</div>
+              <div class="dnd-chip" draggable="true" data-answer="claim">claim_resources</div>
+            </div>
+            <div class="dnd-zones">
+              <div class="dnd-zone" data-correct="getcand"><div class="dnd-zone-label">GET /allocation_candidates returning allocation_requests + provider_summaries</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="reqspec"><div class="dnd-zone-label">Runs ordered request filters that mutate the RequestSpec before Placement</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="filtered"><div class="dnd-zone-label">Applies enabled_filters to drop hosts that fail any check</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="weighed"><div class="dnd-zone-label">Normalizes and sums weigher scores to rank surviving hosts</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="claim"><div class="dnd-zone-label">PUT /allocations/{consumer_uuid} with generation-conflict handling</div><div class="dnd-zone-target">Drop here</div></div>
+            </div>
+            <div style="margin-top: var(--space-6);">
+              <button class="btn btn-primary" onclick="checkDnD('match1')">Check matches</button>
+              <button class="btn" onclick="resetDnD('match1')">Reset</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <div class="callout callout-success">
+            <div class="callout-icon">🚀</div>
+            <div class="callout-content">
+              <span class="callout-title">You've traced the whole procedure</span>
+              <p>From the conductor's single RPC call to a returned <code>Selection</code>: request filters tighten the spec, Placement lists candidates, the HostManager builds host states, filters gate and weighers rank them, a claim wins the host, and alternates are wrapped alongside it. That's how Nova picks a host.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <div class="footer">
+    Traced from the OpenStack Nova source on branch <code>nectar/2024.1</code>. Code snippets are exact excerpts. Built in the codebase-to-course visual style.
+  </div>
+
+  </main>
+
+  <script>
+  (function () {
+    'use strict';
+    function $(sel, ctx) { return (ctx || document).querySelector(sel); }
+    function $$(sel, ctx) { return Array.from((ctx || document).querySelectorAll(sel)); }
+
+    /* ── NAV & PROGRESS ── */
+    const progressBar = $('#progress-bar');
+    const navDots = $$('.nav-dot');
+    const modules = $$('.module');
+
+    function updateProgress() {
+      if (!progressBar) return;
+      const scrollTop = window.scrollY;
+      const scrollHeight = document.documentElement.scrollHeight - window.innerHeight;
+      const pct = scrollHeight > 0 ? (scrollTop / scrollHeight) * 100 : 0;
+      progressBar.style.width = pct + '%';
+      progressBar.setAttribute('aria-valuenow', Math.round(pct));
+      updateNavDots();
+    }
+    function updateNavDots() {
+      const scrollMid = window.scrollY + window.innerHeight / 2;
+      modules.forEach((mod, i) => {
+        const dot = navDots[i];
+        if (!dot) return;
+        const top = mod.offsetTop;
+        const bottom = top + mod.offsetHeight;
+        if (scrollMid >= top && scrollMid < bottom) { dot.classList.add('active'); dot.classList.remove('visited'); }
+        else if (window.scrollY + window.innerHeight > top) { dot.classList.remove('active'); dot.classList.add('visited'); }
+        else { dot.classList.remove('active', 'visited'); }
+      });
+    }
+    window.addEventListener('scroll', () => requestAnimationFrame(updateProgress), { passive: true });
+    updateProgress();
+    navDots.forEach(dot => dot.addEventListener('click', () => {
+      const target = $('#' + dot.dataset.target);
+      if (target) target.scrollIntoView({ behavior: 'smooth' });
+    }));
+
+    /* ── KEYBOARD NAV ── */
+    function currentModuleIndex() {
+      const scrollMid = window.scrollY + window.innerHeight / 2;
+      for (let i = 0; i < modules.length; i++) {
+        const top = modules[i].offsetTop, bottom = top + modules[i].offsetHeight;
+        if (scrollMid >= top && scrollMid < bottom) return i;
+      }
+      return 0;
+    }
+    document.addEventListener('keydown', e => {
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { const n = modules[currentModuleIndex() + 1]; if (n) { n.scrollIntoView({ behavior: 'smooth' }); e.preventDefault(); } }
+      if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { const p = modules[currentModuleIndex() - 1]; if (p) { p.scrollIntoView({ behavior: 'smooth' }); e.preventDefault(); } }
+    });
+
+    /* ── REVEAL ── */
+    const revealObserver = new IntersectionObserver(entries => {
+      entries.forEach(entry => { if (entry.isIntersecting) { entry.target.classList.add('visible'); revealObserver.unobserve(entry.target); } });
+    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.08 });
+    $$('.animate-in').forEach(el => revealObserver.observe(el));
+    $$('.stagger-children').forEach(parent => Array.from(parent.children).forEach((child, i) => child.style.setProperty('--stagger-index', i)));
+
+    /* ── GLOSSARY ── */
+    let activeTooltip = null;
+    function positionTooltip(term, tip) {
+      const rect = term.getBoundingClientRect();
+      const tipWidth = Math.min(320, Math.max(200, window.innerWidth * 0.8));
+      let left = rect.left + rect.width / 2 - tipWidth / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - tipWidth - 8));
+      tip.style.left = left + 'px'; tip.style.width = tipWidth + 'px';
+      document.body.appendChild(tip);
+      const tipHeight = tip.offsetHeight;
+      if (rect.top - tipHeight - 12 < 0) { tip.style.top = (rect.bottom + 8) + 'px'; tip.classList.add('flip'); }
+      else { tip.style.top = (rect.top - tipHeight - 8) + 'px'; tip.classList.remove('flip'); }
+    }
+    function showTooltip(term, tip) {
+      if (activeTooltip && activeTooltip !== tip) { activeTooltip.classList.remove('visible'); activeTooltip.remove(); }
+      positionTooltip(term, tip);
+      requestAnimationFrame(() => tip.classList.add('visible'));
+      activeTooltip = tip;
+    }
+    function hideTooltip(tip) {
+      tip.classList.remove('visible');
+      setTimeout(() => { if (!tip.classList.contains('visible')) tip.remove(); }, 150);
+      if (activeTooltip === tip) activeTooltip = null;
+    }
+    $$('.term').forEach(term => {
+      const tip = document.createElement('span');
+      tip.className = 'term-tooltip';
+      tip.textContent = term.dataset.definition;
+      term.addEventListener('mouseenter', () => showTooltip(term, tip));
+      term.addEventListener('mouseleave', () => hideTooltip(tip));
+      term.addEventListener('click', e => { e.stopPropagation(); tip.classList.contains('visible') ? hideTooltip(tip) : showTooltip(term, tip); });
+    });
+    document.addEventListener('click', () => { if (activeTooltip) { activeTooltip.classList.remove('visible'); activeTooltip.remove(); activeTooltip = null; } });
+
+    /* ── QUIZ ── */
+    window.selectOption = function (btn) {
+      const block = btn.closest('.quiz-question-block');
+      $$('.quiz-option', block).forEach(o => o.classList.remove('selected'));
+      btn.classList.add('selected');
+    };
+    window.checkQuiz = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.quiz-question-block', container).forEach(q => {
+        const selected = $('.quiz-option.selected', q);
+        const feedback = $('.quiz-feedback', q);
+        const correct = q.dataset.correct;
+        const rightExp = q.dataset.explanationRight || '';
+        const wrongExp = q.dataset.explanationWrong || '';
+        if (!selected) { feedback.textContent = 'Pick an answer first!'; feedback.className = 'quiz-feedback show warning'; return; }
+        $$('.quiz-option', q).forEach(o => o.disabled = true);
+        if (selected.dataset.value === correct) {
+          selected.classList.add('correct');
+          feedback.innerHTML = '<strong>Exactly!</strong> ' + rightExp;
+          feedback.className = 'quiz-feedback show success';
+        } else {
+          selected.classList.add('incorrect');
+          const correctBtn = $('.quiz-option[data-value="' + correct + '"]', q);
+          if (correctBtn) correctBtn.classList.add('correct');
+          feedback.innerHTML = '<strong>Not quite.</strong> ' + wrongExp;
+          feedback.className = 'quiz-feedback show error';
+        }
+      });
+    };
+    window.resetQuiz = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.quiz-option', container).forEach(o => { o.classList.remove('selected', 'correct', 'incorrect'); o.disabled = false; });
+      $$('.quiz-feedback', container).forEach(f => { f.className = 'quiz-feedback'; f.textContent = ''; });
+    };
+
+    /* ── DND ── */
+    function initDnD(containerEl) {
+      if (!containerEl) return;
+      const chips = $$('.dnd-chip', containerEl);
+      const zones = $$('.dnd-zone', containerEl);
+      chips.forEach(chip => {
+        chip.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', chip.dataset.answer); chip.classList.add('dragging'); });
+        chip.addEventListener('dragend', () => chip.classList.remove('dragging'));
+      });
+      zones.forEach(zone => {
+        const target = $('.dnd-zone-target', zone);
+        if (!target) return;
+        target.addEventListener('dragover', e => { e.preventDefault(); target.classList.add('drag-over'); });
+        target.addEventListener('dragleave', () => target.classList.remove('drag-over'));
+        target.addEventListener('drop', e => {
+          e.preventDefault(); target.classList.remove('drag-over');
+          const answer = e.dataTransfer.getData('text/plain');
+          const chip = $('.dnd-chip[data-answer="' + answer + '"]', containerEl);
+          if (!chip) return;
+          target.textContent = chip.textContent; target.dataset.placed = answer; chip.classList.add('placed');
+        });
+      });
+      chips.forEach(chip => {
+        chip.addEventListener('touchstart', e => {
+          e.preventDefault();
+          const touch = e.touches[0];
+          const ghost = chip.cloneNode(true);
+          ghost.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;left:' + (touch.clientX - 40) + 'px;top:' + (touch.clientY - 20) + 'px;background:var(--color-accent);color:white;padding:0.5rem 1rem;border-radius:9999px;font-size:0.875rem;font-weight:600;opacity:0.85;';
+          document.body.appendChild(ghost); chip._ghost = ghost; chip._answer = chip.dataset.answer;
+        }, { passive: false });
+        chip.addEventListener('touchmove', e => {
+          e.preventDefault(); const touch = e.touches[0];
+          if (chip._ghost) { chip._ghost.style.left = (touch.clientX - 40) + 'px'; chip._ghost.style.top = (touch.clientY - 20) + 'px'; }
+          zones.forEach(z => { const t = $('.dnd-zone-target', z); if (t) t.classList.remove('drag-over'); });
+          const el = document.elementFromPoint(touch.clientX, touch.clientY);
+          const zt = el && el.closest('.dnd-zone-target'); if (zt) zt.classList.add('drag-over');
+        }, { passive: false });
+        chip.addEventListener('touchend', e => {
+          if (chip._ghost) { chip._ghost.remove(); chip._ghost = null; }
+          const touch = e.changedTouches[0];
+          const el = document.elementFromPoint(touch.clientX, touch.clientY);
+          const zt = el && el.closest('.dnd-zone-target');
+          if (zt) { zt.textContent = chip.textContent; zt.dataset.placed = chip._answer; chip.classList.add('placed'); }
+          zones.forEach(z => { const t = $('.dnd-zone-target', z); if (t) t.classList.remove('drag-over'); });
+        });
+      });
+    }
+    window.checkDnD = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.dnd-zone', container).forEach(zone => {
+        const target = $('.dnd-zone-target', zone);
+        if (!target || !target.dataset.placed) return;
+        if (target.dataset.placed === zone.dataset.correct) target.classList.add('correct-placed');
+        else target.classList.add('incorrect-placed');
+      });
+    };
+    window.resetDnD = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.dnd-zone-target', container).forEach(t => { t.textContent = 'Drop here'; delete t.dataset.placed; t.classList.remove('correct-placed', 'incorrect-placed'); });
+      $$('.dnd-chip', container).forEach(c => c.classList.remove('placed', 'dragging'));
+    };
+    $$('.dnd-container').forEach(el => initDnD(el));
+
+    /* ── ARCH DIAGRAM ── */
+    $$('.arch-component').forEach(comp => {
+      comp.addEventListener('click', function () {
+        const diagram = this.closest('.arch-diagram');
+        $$('.arch-component', diagram).forEach(c => c.classList.remove('active'));
+        this.classList.add('active');
+        const descEl = $('.arch-description', diagram);
+        if (descEl) descEl.textContent = this.dataset.desc || '';
+      });
+    });
+
+    /* ── FLOW ANIMATION ── */
+    function initFlow(containerEl) {
+      if (!containerEl) return;
+      const stepsData = JSON.parse(containerEl.dataset.steps || '[]');
+      const labelEl = $('.flow-step-label', containerEl);
+      const progressEl = $('.flow-progress', containerEl);
+      const packet = $('.flow-packet', containerEl);
+      let step = 0;
+      function updateProgress() { if (progressEl) progressEl.textContent = 'Step ' + step + ' / ' + stepsData.length; }
+      function animatePacket(fromId, toId) {
+        if (!packet) return;
+        const fromEl = $('#' + fromId), toEl = $('#' + toId);
+        if (!fromEl || !toEl) return;
+        const fromR = fromEl.getBoundingClientRect(), toR = toEl.getBoundingClientRect(), contR = containerEl.getBoundingClientRect();
+        const fx = fromR.left + fromR.width / 2 - contR.left, fy = fromR.top + fromR.height / 2 - contR.top;
+        const tx = toR.left + toR.width / 2 - contR.left, ty = toR.top + toR.height / 2 - contR.top;
+        packet.style.setProperty('--packet-from-x', fx + 'px'); packet.style.setProperty('--packet-from-y', fy + 'px');
+        packet.style.setProperty('--packet-to-x', tx + 'px'); packet.style.setProperty('--packet-to-y', ty + 'px');
+        packet.style.display = 'block'; packet.style.animation = 'none'; packet.offsetHeight;
+        packet.style.animation = 'packetMove 0.8s var(--ease-in-out) forwards';
+        setTimeout(() => { packet.style.display = 'none'; }, 850);
+      }
+      function next() {
+        if (step >= stepsData.length) return;
+        const s = stepsData[step];
+        $$('.flow-actor', containerEl).forEach(a => a.classList.remove('active'));
+        if (s.highlight) { const hEl = $('#flow-' + s.highlight, containerEl); if (hEl) hEl.classList.add('active'); }
+        if (s.packet && s.from && s.to) animatePacket('flow-' + s.from, 'flow-' + s.to);
+        if (labelEl) labelEl.textContent = s.label || '';
+        step++; updateProgress();
+      }
+      function reset() {
+        step = 0;
+        $$('.flow-actor', containerEl).forEach(a => a.classList.remove('active'));
+        const firstEl = $('.flow-actor', containerEl); if (firstEl) firstEl.classList.add('active');
+        if (labelEl) labelEl.textContent = 'Click "Next step" to begin the journey';
+        if (packet) packet.style.display = 'none';
+        updateProgress();
+      }
+      const nextBtn = $('.flow-next-btn', containerEl), resetBtn = $('.flow-reset-btn', containerEl);
+      if (nextBtn) nextBtn.addEventListener('click', next);
+      if (resetBtn) resetBtn.addEventListener('click', reset);
+      updateProgress();
+    }
+    $$('.flow-animation').forEach(el => initFlow(el));
+  })();
+  </script>
+
+  <script>
+  /* ── AGGREGATE ROUTING BOARD (module 08) ── */
+  (function () {
+    function $(s, c) { return (c || document).querySelector(s); }
+    function $$(s, c) { return Array.from((c || document).querySelectorAll(s)); }
+    var board = $('#board');
+    if (!board) return;
+
+    var MODES = {
+      extraspecs: {
+        subjA: { title: 'Flavor 1', sub: 'extra_spec', meta: 'special-hw=true' },
+        subjC: { title: 'Flavor 2', sub: 'special-hw=gpu' },
+        subjB: { title: 'Flavor 3', sub: '(no extra_spec)', meta: '' },
+        aggMeta: 'special-hw=true',
+        note: 'AggregateInstanceExtraSpecsFilter — Agg A metadata: special-hw=true. Three flavors: a matching value, a different value, and none. Click AggregateImagePropertiesIsolation to compare the same three cases for images.',
+        summary: '<strong>flavor &rarr; host.</strong> This filter loops the flavor\'s specs, so naming the key is a DEMAND: Flavor 1 (matching) lands only on Agg A and is rejected from Agg B; Flavor 2 (different value) is rejected everywhere. Only Flavor 3 (no spec) passes anywhere &mdash; and leaks onto the reserved Agg A. <a href="https://docs.openstack.org/nova/latest/admin/scheduling.html#aggregateinstanceextraspecsfilter" target="_blank" rel="noopener">docs &#8599;</a>',
+        eAA: { s: 'allow', why: 'special-hw=true matches Agg A value &rarr; allowed' },
+        eAB: { s: 'block', why: 'Agg B lacks the key &rarr; flavor demands it &rarr; rejected (CONFINED &mdash; an image would be allowed here)' },
+        eCA: { s: 'block', why: 'special-hw=gpu &ne; true &rarr; value mismatch &rarr; rejected' },
+        eCB: { s: 'block', why: 'Agg B lacks the key &rarr; rejected (an image would be allowed here)' },
+        eBA: { s: 'allow', why: 'no extra_spec &rarr; early return True &rarr; leaks onto reserved Agg A' },
+        eBB: { s: 'allow', why: 'no requirement &rarr; allowed' }
+      },
+      typeaffinity: {
+        subjA: { title: 'Flavor A', sub: 'name match', meta: '' },
+        subjB: { title: 'Flavor B', sub: '(name not listed)', meta: '' },
+        aggMeta: 'instance_type=FlavorA',
+        note: 'AggregateTypeAffinityFilter — Agg A metadata: instance_type=FlavorA (a comma-list of flavor NAMES). Agg B has no instance_type.',
+        summary: '<strong>host &rarr; flavor.</strong> Aggregate A accepts only the flavor names in its instance_type list, so Flavor B is rejected &mdash; the host IS reserved. But Flavor A can still land on Aggregate B, which has no list (return not vals &rarr; True). Opposite asymmetry to ExtraSpecs. <a href="https://docs.openstack.org/nova/latest/admin/scheduling.html#aggregatetypeaffinityfilter" target="_blank" rel="noopener">docs &#8599;</a>',
+        eAA: { s: 'allow', why: 'Flavor A name is in Agg A instance_type list' },
+        eAB: { s: 'allow', why: 'Agg B has no list &rarr; return not vals &rarr; True (A leaks into B)' },
+        eBA: { s: 'block', why: 'Agg A list set, Flavor B name not in it &rarr; rejected' },
+        eBB: { s: 'allow', why: 'Agg B has no list &rarr; allowed' }
+      },
+      flavorcombined: {
+        subjA: { title: 'Flavor A', sub: 'spec + name match', meta: 'special-hw=true' },
+        subjB: { title: 'Flavor B', sub: '(no spec, other name)', meta: '' },
+        aggMeta: 'special-hw=true + instance_type=FlavorA',
+        note: 'Both flavor filters enabled together. No [scheduler] toggle required; both live in enabled_filters.',
+        summary: '<strong>flavor &harr; host.</strong> ExtraSpecs confines Flavor A to Agg A; TypeAffinity reserves Agg A for Flavor A. Both off-diagonals are blocked &mdash; a clean 1:1 lock (A&harr;Agg A, B&harr;Agg B). Caveat: flavor-name based, no image coverage.',
+        eAA: { s: 'allow', why: 'ExtraSpecs &#10003; and TypeAffinity &#10003;' },
+        eAB: { s: 'block', why: 'ExtraSpecs &#10007; (Agg B lacks the key)' },
+        eBA: { s: 'block', why: 'TypeAffinity &#10007; (Flavor B not in Agg A list)' },
+        eBB: { s: 'allow', why: 'both filters pass' }
+      },
+      aggimage: {
+        subjA: { title: 'Image 1', sub: 'image property', meta: 'license=windows' },
+        subjC: { title: 'Image 2', sub: 'license=linux' },
+        subjB: { title: 'Image 3', sub: '(no license prop)', meta: '' },
+        aggMeta: 'license=windows',
+        note: 'AggregateImagePropertiesIsolation — Agg A metadata: license=windows. The filter loops over the HOST metadata and only rejects on an explicit value conflict.',
+        summary: '<strong>weak / conflict-only.</strong> Of the three images, ONLY Image 2 (license=linux, a conflicting value) is blocked &mdash; and only on Agg A. Image 1 (matching) is not confined: it also lands on Agg B. Image 3 (no property) is never rejected, so it lands on the reserved Agg A too (bug 1677217). The filter enforces neither hard direction; for real image isolation use the trait filter: Filtering hosts by isolating aggregates. <a href="https://docs.openstack.org/nova/2024.1/reference/isolate-aggregates.html" target="_blank" rel="noopener">docs &#8599;</a>',
+        eAA: { s: 'allow', why: 'license=windows matches host metadata &rarr; allowed' },
+        eAB: { s: 'allow', why: 'Agg B has no license key &rarr; not checked (Image 1 not confined)' },
+        eCA: { s: 'block', why: 'license=linux conflicts with host license=windows &rarr; rejected (the only block)' },
+        eCB: { s: 'allow', why: 'Agg B has no license key &rarr; conflict never tested &rarr; allowed' },
+        eBA: { s: 'allow', why: 'image has no license prop &rarr; never rejected (bug 1677217) &rarr; lands on reserved Agg A' },
+        eBB: { s: 'allow', why: 'no key on host &rarr; allowed' }
+      },
+      reqtenant: {
+        subjA: { title: 'Project P', sub: 'booting tenant', meta: 'project_id = P' },
+        subjB: { title: 'Project Q', sub: 'a different tenant', meta: '' },
+        aggMeta: 'filter_tenant_id1=P',
+        note: 'Agg A metadata uses numbered keys, one per project: filter_tenant_id1=<project_id_1>, filter_tenant_id2=<project_id_2>, filter_tenant_id3=<project_id_3>. Needs limit_tenants_to_placement_aggregate=true.',
+        summary: '<strong>project &rarr; host &mdash; "Tenant Isolation with Placement".</strong> The request filter forces P\'s request into aggregates tagged for P, so P cannot use Agg B (confined). It does not stop tenant Q from using Agg A &mdash; the host is not reserved. Note the metadata differs from the Nectar filter: numbered keys (filter_tenant_id1, filter_tenant_id2, &hellip;), no nectar: prefix. <a href="https://docs.openstack.org/nova/2024.1/admin/aggregates.html#tenant-isolation-with-placement" target="_blank" rel="noopener">docs &#8599;</a>',
+        eAA: { s: 'allow', why: 'P is forced into its tagged aggregate (Agg A)' },
+        eAB: { s: 'block', why: 'Agg B not tagged for P &rarr; P confined away from it' },
+        eBA: { s: 'allow', why: 'Q is not constrained out of Agg A &rarr; leaks onto reserved host' },
+        eBB: { s: 'allow', why: 'no constraint &rarr; allowed' }
+      },
+      multitenancy: {
+        subjA: { title: 'Project P', sub: 'allowed tenant', meta: 'project_id = P' },
+        subjB: { title: 'Project Q', sub: 'other tenant', meta: '' },
+        aggMeta: 'nectar:filter_tenant_id=P',
+        note: 'NectarAggregateMultiTenancyIsolation — Agg A metadata: nectar:filter_tenant_id is one comma-separated key holding up to 7 project ids (e.g. nectar:filter_tenant_id=P or P,Q,R …). A plain filter in enabled_filters.',
+        summary: '<strong>host &rarr; project.</strong> A host whose aggregate carries nectar:filter_tenant_id only accepts those tenants, so Q is rejected from Agg A &mdash; the host IS reserved. But P can still use Agg B. Mirror of old filter AggregateMultiTenancyIsolation <a href="https://docs.openstack.org/nova/latest/admin/scheduling.html#aggregatemultitenancyisolation" target="_blank" rel="noopener">docs &#8599;</a>',
+        eAA: { s: 'allow', why: 'P is in Agg A filter_tenant_id list' },
+        eAB: { s: 'allow', why: 'Agg B has no tenant restriction (P leaks into B)' },
+        eBA: { s: 'block', why: 'Agg A restricted to P &rarr; Q rejected' },
+        eBB: { s: 'allow', why: 'no restriction &rarr; allowed' }
+      },
+      projectcombined: {
+        subjA: { title: 'Project P', sub: 'tenant P', meta: 'project_id = P' },
+        subjB: { title: 'Project Q', sub: 'other tenant', meta: '' },
+        aggMeta: 'nectar:filter_tenant_id + filter_tenant_idN',
+        note: 'Both tenant mechanisms together. Each reads a DIFFERENT key: NectarAggregateMultiTenancyIsolation uses nectar:filter_tenant_id=<ids>; require_tenant_aggregate uses filter_tenant_id1/2/3=<id>.',
+        summary: '<strong>project &harr; host.</strong> require_tenant_aggregate confines P to Agg A; NectarAggregateMultiTenancyIsolation reserves Agg A for P. Both off-diagonals blocked &mdash; a clean 1:1 lock by project.',
+        eAA: { s: 'allow', why: 'P forced in, and P is allowed &rarr; both pass' },
+        eAB: { s: 'block', why: 'P confined away from untagged Agg B' },
+        eBA: { s: 'block', why: 'Agg A reserved for P &rarr; Q rejected' },
+        eBB: { s: 'allow', why: 'Q unconstrained on allow-all Agg B' }
+      },
+      isolated: {
+        subjA: { title: 'Flavor/Image A', sub: 'requires trait', meta: 'trait:CUSTOM_X=required' },
+        subjB: { title: 'Flavor/Image B', sub: '(no trait)', meta: '' },
+        aggMeta: 'trait:CUSTOM_X=required',
+        note: 'Agg A metadata: trait:CUSTOM_X=required; Agg A hosts expose CUSTOM_X. The trait ALONE already routes trait-requiring workloads to these hosts; enable_isolated_aggregate_filtering=true is what makes the aggregate EXCLUSIVE (it then also rejects workloads that lack the trait).',
+        summary: '<strong>flavor / image &harr; host, from ONE trait.</strong> With the trait on the flavor/image and exposed by the hosts, Placement already routes trait-requiring workloads to Agg A. Turning on enable_isolated_aggregate_filtering adds the reverse lock: the filter then forbids Agg A for workloads WITHOUT the trait (B). Without the toggle the trait still works &mdash; the aggregate is just not exclusive. One trait covers both flavors and images. <a href="https://docs.openstack.org/nova/2024.1/reference/isolate-aggregates.html" target="_blank" rel="noopener">docs &#8599;</a>',
+        eAA: { s: 'allow', why: 'Agg A hosts expose CUSTOM_X; A requires it' },
+        eAB: { s: 'block', why: 'Agg B hosts lack the trait &rarr; Placement excludes' },
+        eBA: { s: 'block', why: 'Agg A requires a trait B lacks &rarr; aggregate forbidden' },
+        eBB: { s: 'allow', why: 'no trait required &rarr; allowed' }
+      }
+    };
+
+    var buttons = $$('.filter-btn');
+
+    function setText(id, txt) { var el = $('#' + id); if (el) el.textContent = txt; }
+    function setMeta(text) {
+      var el = $('#aggA-meta'); if (!el) return;
+      while (el.firstChild) el.removeChild(el.firstChild);
+      var x = el.getAttribute('x');
+      String(text).split('\n').forEach(function (ln, i) {
+        var t = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+        t.setAttribute('x', x); t.setAttribute('dy', i === 0 ? '0' : '13');
+        t.textContent = ln; el.appendChild(t);
+      });
+    }
+    function setHidden(id, hidden) { var el = $('#' + id); if (el) el.classList.toggle('svg-hidden', hidden); }
+
+    function apply(key) {
+      var m = MODES[key];
+      buttons.forEach(function (b) { b.classList.toggle('active', b.dataset.key === key); });
+
+      // dynamic node labels
+      setText('subjA-title', m.subjA.title);
+      setText('subjA-sub', m.subjA.sub);
+      setText('subjA-meta', m.subjA.meta || '');
+      setText('subjB-title', m.subjB.title);
+      setText('subjB-sub', m.subjB.sub);
+      setMeta(m.aggMeta);
+      setText('row-a-label', m.subjA.title);
+      setText('row-b-label', m.subjB.title);
+
+      // optional third subject (image filter: the conflicting-value case)
+      var hasC = !!m.subjC;
+      ['grpC', 'eCA', 'eCB', 'rowC'].forEach(function (id) { setHidden(id, !hasC); });
+      if (hasC) {
+        setText('subjC-title', m.subjC.title);
+        setText('subjC-sub', m.subjC.sub);
+        setText('row-c-label', m.subjC.title);
+      }
+
+      // edges + matrix
+      var EDGES = hasC ? ['eAA', 'eAB', 'eBA', 'eBB', 'eCA', 'eCB'] : ['eAA', 'eAB', 'eBA', 'eBB'];
+      EDGES.forEach(function (id) {
+        var cell = m[id];
+        var path = $('#' + id, board);
+        var ok = cell.s === 'allow';
+        path.classList.toggle('allow', ok);
+        path.classList.toggle('block', !ok);
+        if (ok) path.setAttribute('marker-end', 'url(#arrow-allow)');
+        else path.removeAttribute('marker-end');
+        var td = $('#m-' + id);
+        td.className = 'cell ' + (ok ? 'ok' : 'bad');
+        td.innerHTML = '<span class="verdict ' + (ok ? 'ok' : 'bad') + '">' + (ok ? '&#10003; allowed' : '&#10007; blocked') + '</span><span class="why">' + cell.why + '</span>';
+      });
+
+      $('#board-note').textContent = m.note;
+      $('#board-summary').innerHTML = m.summary;
+    }
+
+    buttons.forEach(function (b) { b.addEventListener('click', function () { apply(b.dataset.key); }); });
+    apply('extraspecs');
+  })();
+  </script>
+</body>
+</html>

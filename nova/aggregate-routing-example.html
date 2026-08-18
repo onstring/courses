@@ -1,0 +1,623 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Aggregate Routing Board — Who Lands Where?</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400;1,9..40,500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+  <style>
+  /* ── DESIGN TOKENS ─────────────────────────────────────────── */
+  :root {
+    --color-bg:             #FAF7F2;
+    --color-bg-warm:        #F5F0E8;
+    --color-bg-code:        #1E1E2E;
+    --color-text:           #2C2A28;
+    --color-text-secondary: #6B6560;
+    --color-text-muted:     #9E9790;
+    --color-border:         #E5DFD6;
+    --color-border-light:   #EEEBE5;
+    --color-surface:        #FFFFFF;
+    --color-surface-warm:   #FDF9F3;
+
+    /* ACCENT — teal, fitting for OpenStack infrastructure */
+    --color-accent:         #2E7D63;
+    --color-accent-hover:   #235E4B;
+    --color-accent-light:   #E3F1EB;
+    --color-accent-muted:   #5DA88E;
+
+    --color-success:        #2D8B55;
+    --color-success-light:  #E8F5EE;
+    --color-error:          #C93B3B;
+    --color-error-light:    #FDE8E8;
+    --color-info:           #2A7B9B;
+    --color-info-light:     #E4F2F7;
+
+    --color-actor-1:        #D94F30;
+    --color-actor-2:        #2A7B9B;
+    --color-actor-3:        #7B6DAA;
+    --color-actor-4:        #D4A843;
+    --color-actor-5:        #2D8B55;
+
+    --font-display: 'Bricolage Grotesque', Georgia, serif;
+    --font-body:    'DM Sans', -apple-system, sans-serif;
+    --font-mono:    'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+
+    --text-xs:   0.75rem;
+    --text-sm:   0.875rem;
+    --text-base: 1rem;
+    --text-lg:   1.125rem;
+    --text-xl:   1.25rem;
+    --text-2xl:  1.5rem;
+    --text-3xl:  1.875rem;
+    --text-4xl:  2.25rem;
+    --text-5xl:  3rem;
+    --text-6xl:  3.75rem;
+
+    --leading-tight:  1.15;
+    --leading-snug:   1.3;
+    --leading-normal: 1.6;
+    --leading-loose:  1.8;
+
+    --space-1:  0.25rem; --space-2:  0.5rem; --space-3:  0.75rem;
+    --space-4:  1rem;    --space-5:  1.25rem; --space-6:  1.5rem;
+    --space-8:  2rem;    --space-10: 2.5rem;  --space-12: 3rem;
+    --space-16: 4rem;    --space-20: 5rem;    --space-24: 6rem;
+
+    --content-width:      800px;
+    --content-width-wide: 1000px;
+    --nav-height:         50px;
+
+    --radius-sm:   8px;  --radius-md:   12px;
+    --radius-lg:   16px; --radius-full: 9999px;
+
+    --shadow-sm: 0 1px 2px rgba(44,42,40,0.05);
+    --shadow-md: 0 4px 12px rgba(44,42,40,0.08);
+    --shadow-lg: 0 8px 24px rgba(44,42,40,0.10);
+    --shadow-xl: 0 16px 48px rgba(44,42,40,0.12);
+
+    --ease-out:    cubic-bezier(0.16,1,0.3,1);
+    --ease-in-out: cubic-bezier(0.65,0,0.35,1);
+    --duration-fast:   150ms;
+    --duration-normal: 300ms;
+    --duration-slow:   500ms;
+    --stagger-delay:   120ms;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-snap-type: y proximity; scroll-behavior: smooth; }
+  body {
+    font-family: var(--font-body);
+    font-size: var(--text-base);
+    color: var(--color-text);
+    line-height: var(--leading-normal);
+    background: var(--color-bg);
+    background-image: radial-gradient(ellipse at 20% 50%, rgba(42,123,155,0.04) 0%, transparent 50%);
+  }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: var(--radius-full); }
+
+  pre, code { white-space: pre-wrap; word-break: break-word; overflow-x: hidden; }
+  .translation-code::-webkit-scrollbar, pre::-webkit-scrollbar { display: none; }
+
+  .code-keyword  { color: #CBA6F7; }
+  .code-string   { color: #A6E3A1; }
+  .code-function { color: #89B4FA; }
+  .code-comment  { color: #6C7086; }
+  .code-number   { color: #FAB387; }
+  .code-property { color: #F9E2AF; }
+  .code-operator { color: #94E2D5; }
+  .code-class    { color: #F9E2AF; }
+  .code-line     { display: block; }
+
+  /* ── NAV ── */
+  .nav {
+    position: fixed; top: 0; left: 0; right: 0;
+    height: var(--nav-height); z-index: 1000;
+    background: rgba(250,247,242,0.92); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--color-border-light);
+  }
+  .progress-bar { position: absolute; bottom: 0; left: 0; height: 2px; width: 0%; background: var(--color-accent); transition: width 100ms linear; }
+  .nav-inner { max-width: var(--content-width-wide); margin: 0 auto; padding: 0 var(--space-6); height: 100%; display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
+  .nav-title { font-family: var(--font-display); font-size: var(--text-sm); font-weight: 600; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; }
+  .nav-dots { display: flex; align-items: center; gap: var(--space-2); }
+  .nav-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--color-text-muted); background: transparent; cursor: pointer; transition: all var(--duration-fast); position: relative; }
+  .nav-dot::after { content: attr(data-tooltip); position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: var(--color-bg-code); color: #CDD6F4; font-family: var(--font-body); font-size: var(--text-xs); white-space: nowrap; padding: var(--space-1) var(--space-3); border-radius: var(--radius-sm); pointer-events: none; opacity: 0; transition: opacity var(--duration-fast); }
+  .nav-dot:hover::after { opacity: 1; }
+  .nav-dot.active { border-color: var(--color-accent); background: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-light); }
+  .nav-dot.visited { border-color: var(--color-accent-muted); background: var(--color-accent-muted); }
+
+  /* ── MODULE ── */
+  .module { min-height: 100dvh; min-height: 100vh; scroll-snap-align: start; padding: var(--space-16) var(--space-6); padding-top: calc(var(--nav-height) + var(--space-12)); }
+  .module-content { max-width: var(--content-width); margin: 0 auto; }
+  .module-header { margin-bottom: var(--space-12); }
+  .module-number { display: block; font-family: var(--font-display); font-size: var(--text-6xl); font-weight: 800; color: var(--color-accent); opacity: 0.15; line-height: 1; margin-bottom: var(--space-2); }
+  .module-title { font-family: var(--font-display); font-size: var(--text-4xl); font-weight: 700; line-height: var(--leading-tight); color: var(--color-text); }
+  .module-subtitle { margin-top: var(--space-3); font-size: var(--text-lg); color: var(--color-text-secondary); line-height: var(--leading-snug); }
+  .screen { margin-bottom: var(--space-16); }
+  .screen-heading { font-family: var(--font-display); font-size: var(--text-2xl); font-weight: 600; color: var(--color-text); margin-bottom: var(--space-6); line-height: var(--leading-snug); }
+  p { margin-bottom: var(--space-4); }
+  p:last-child { margin-bottom: 0; }
+  .lead { font-size: var(--text-lg); }
+
+  /* ── ANIMATIONS ── */
+  .animate-in { opacity: 0; transform: translateY(20px); transition: opacity var(--duration-slow) var(--ease-out), transform var(--duration-slow) var(--ease-out); }
+  .animate-in.visible { opacity: 1; transform: translateY(0); }
+  .stagger-children > .animate-in { transition-delay: calc(var(--stagger-index, 0) * var(--stagger-delay)); }
+
+  /* ── HERO ── */
+  .hero { min-height: 100vh; display: flex; flex-direction: column; justify-content: center; padding: var(--space-16) var(--space-6); max-width: var(--content-width); margin: 0 auto; }
+  .hero-eyebrow { font-family: var(--font-mono); font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.15em; color: var(--color-accent); margin-bottom: var(--space-4); }
+  .hero-title { font-family: var(--font-display); font-size: var(--text-6xl); font-weight: 800; line-height: 1.05; margin-bottom: var(--space-6); }
+  .hero-sub { font-size: var(--text-xl); color: var(--color-text-secondary); max-width: 640px; margin-bottom: var(--space-8); }
+  .hero-meta { display: flex; gap: var(--space-6); flex-wrap: wrap; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-text-muted); }
+  .hero-meta span { display: flex; align-items: center; gap: var(--space-2); }
+
+  /* ── TRANSLATION ── */
+  .translation-block { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-radius: var(--radius-md); overflow: hidden; box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .translation-code { background: var(--color-bg-code); color: #CDD6F4; padding: var(--space-6); font-family: var(--font-mono); font-size: var(--text-sm); line-height: 1.7; position: relative; overflow-x: hidden; }
+  .translation-english { background: var(--color-surface-warm); padding: var(--space-6); font-size: var(--text-sm); line-height: 1.7; border-left: 3px solid var(--color-accent); }
+  .translation-label { position: absolute; top: var(--space-2); right: var(--space-3); font-family: var(--font-mono); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.5; }
+  .translation-english .translation-label { position: static; display: block; margin-bottom: var(--space-3); color: var(--color-text-muted); }
+  .translation-english strong { color: var(--color-text); }
+  .file-ref { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-accent); background: var(--color-accent-light); padding: 1px 6px; border-radius: 4px; }
+
+  /* ── FLOW ANIMATION ── */
+  .flow-animation { position: relative; background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-8); box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .flow-actors { display: flex; justify-content: center; align-items: center; gap: var(--space-4); margin-bottom: var(--space-8); flex-wrap: wrap; }
+  .flow-actor { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); transition: all var(--duration-normal) var(--ease-out); }
+  .flow-actor-icon { width: 54px; height: 54px; border-radius: var(--radius-md); background: var(--color-bg-warm); border: 2px solid var(--color-border); display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-size: var(--text-base); font-weight: 700; transition: all var(--duration-normal) var(--ease-out); color: var(--color-text-secondary); }
+  .flow-actor span { font-size: var(--text-xs); color: var(--color-text-secondary); font-family: var(--font-mono); text-align: center; }
+  .flow-actor.active .flow-actor-icon { border-color: var(--color-accent); background: var(--color-accent-light); box-shadow: 0 0 0 3px var(--color-accent-light), 0 0 20px rgba(42,123,155,0.18); transform: scale(1.12); color: var(--color-accent-hover); }
+  .flow-packet { width: 16px; height: 16px; border-radius: 50%; background: var(--color-accent); position: absolute; pointer-events: none; display: none; box-shadow: 0 0 8px rgba(42,123,155,0.6); z-index: 5; }
+  .flow-step-label { text-align: center; font-size: var(--text-sm); color: var(--color-text); min-height: 3em; padding: var(--space-3) var(--space-4); background: var(--color-bg-warm); border-radius: var(--radius-sm); margin-bottom: var(--space-6); line-height: var(--leading-normal); }
+  .flow-controls { display: flex; align-items: center; gap: var(--space-3); }
+  .flow-progress { margin-left: auto; font-size: var(--text-xs); color: var(--color-text-muted); font-family: var(--font-mono); }
+
+  /* ── ARCH DIAGRAM ── */
+  .arch-diagram { background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-8); box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .arch-zone { border: 1px dashed var(--color-border); border-radius: var(--radius-md); padding: var(--space-6); margin-bottom: var(--space-4); }
+  .arch-zone-label { font-family: var(--font-mono); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-muted); margin-bottom: var(--space-4); }
+  .arch-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+  .arch-component { display: inline-flex; flex-direction: column; align-items: center; gap: var(--space-2); padding: var(--space-4); background: var(--color-surface-warm); border: 1px solid var(--color-border); border-radius: var(--radius-md); cursor: pointer; margin: var(--space-2); transition: all var(--duration-fast); font-size: var(--text-sm); min-width: 120px; }
+  .arch-component:hover, .arch-component.active { border-color: var(--color-accent); background: var(--color-accent-light); transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+  .arch-component strong { font-family: var(--font-display); }
+  .arch-component small { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+  .arch-description { margin-top: var(--space-4); padding: var(--space-4); background: var(--color-bg-warm); border-radius: var(--radius-sm); font-size: var(--text-sm); color: var(--color-text-secondary); min-height: 2.5em; }
+
+  /* ── CALLOUT ── */
+  .callout { display: flex; gap: var(--space-4); padding: var(--space-5); border-radius: var(--radius-md); margin: var(--space-6) 0; border-left: 4px solid; }
+  .callout-accent  { background: var(--color-accent-light);  border-color: var(--color-accent); }
+  .callout-info    { background: var(--color-info-light);    border-color: var(--color-info); }
+  .callout-warning { background: var(--color-error-light);   border-color: var(--color-error); }
+  .callout-success { background: var(--color-success-light); border-color: var(--color-success); }
+  .callout-icon { font-size: 1.25rem; flex-shrink: 0; margin-top: 2px; }
+  .callout-title { display: block; font-weight: 700; margin-bottom: var(--space-1); }
+  .callout-content p { font-size: var(--text-sm); margin: 0; color: var(--color-text-secondary); }
+
+  /* ── STEP CARDS ── */
+  .step-cards { display: flex; flex-direction: column; gap: var(--space-3); margin: var(--space-6) 0; }
+  .step-card { display: flex; align-items: flex-start; gap: var(--space-4); padding: var(--space-4) var(--space-5); background: var(--color-surface); border-radius: var(--radius-md); border-left: 3px solid var(--color-accent); box-shadow: var(--shadow-sm); }
+  .step-num { width: 32px; height: 32px; border-radius: 50%; background: var(--color-accent); color: white; font-weight: 700; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); flex-shrink: 0; }
+  .step-body strong { display: block; font-weight: 600; margin-bottom: var(--space-1); }
+  .step-body p { margin: 0; color: var(--color-text-secondary); font-size: var(--text-sm); }
+  .step-body .src { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+
+  /* ── PATTERN CARDS ── */
+  .pattern-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-4); margin: var(--space-6) 0; }
+  .pattern-card { background: var(--color-surface); border-radius: var(--radius-md); padding: var(--space-6); box-shadow: var(--shadow-sm); border-top: 3px solid var(--color-accent); transition: transform var(--duration-normal) var(--ease-out), box-shadow var(--duration-normal); }
+  .pattern-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-md); }
+  .pattern-icon { font-size: 1.5rem; margin-bottom: var(--space-3); }
+  .pattern-title { font-family: var(--font-display); font-size: var(--text-base); font-weight: 700; margin-bottom: var(--space-2); }
+  .pattern-desc { font-size: var(--text-sm); color: var(--color-text-secondary); line-height: var(--leading-normal); margin: 0; }
+
+  /* ── STATE TIMELINE ── */
+  .state-track { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: var(--space-6) 0; }
+  .state-pill { font-family: var(--font-mono); font-size: var(--text-xs); padding: var(--space-2) var(--space-3); border-radius: var(--radius-full); background: var(--color-surface); border: 1px solid var(--color-border); }
+  .state-pill.vm { background: var(--color-accent-light); border-color: var(--color-accent-muted); color: var(--color-accent-hover); font-weight: 600; }
+  .state-pill.task { background: var(--color-surface-warm); color: var(--color-text-secondary); }
+  .state-pill.done { background: var(--color-success-light); border-color: var(--color-success); color: var(--color-success); font-weight: 600; }
+  .state-arrow { color: var(--color-text-muted); }
+
+  /* ── QUIZ ── */
+  .quiz-container { background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-8); box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .quiz-question-block { margin-bottom: var(--space-8); }
+  .quiz-question-block:last-of-type { margin-bottom: 0; }
+  .quiz-question { font-family: var(--font-display); font-size: var(--text-lg); font-weight: 600; margin-bottom: var(--space-4); line-height: var(--leading-snug); }
+  .quiz-options { display: flex; flex-direction: column; gap: var(--space-2); }
+  .quiz-option { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: 2px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); cursor: pointer; width: 100%; text-align: left; font-family: var(--font-body); font-size: var(--text-base); transition: border-color var(--duration-fast), background var(--duration-fast); }
+  .quiz-option:hover:not(:disabled) { border-color: var(--color-accent-muted); }
+  .quiz-option.selected { border-color: var(--color-accent); background: var(--color-accent-light); }
+  .quiz-option.correct  { border-color: var(--color-success); background: var(--color-success-light); }
+  .quiz-option.incorrect{ border-color: var(--color-error);   background: var(--color-error-light); }
+  .quiz-option:disabled { cursor: default; }
+  .quiz-option-radio { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--color-border); flex-shrink: 0; transition: all var(--duration-fast); }
+  .quiz-option.selected .quiz-option-radio { border-color: var(--color-accent); background: var(--color-accent); box-shadow: inset 0 0 0 3px white; }
+  .quiz-option.correct .quiz-option-radio  { border-color: var(--color-success); background: var(--color-success); box-shadow: inset 0 0 0 3px white; }
+  .quiz-option.incorrect .quiz-option-radio{ border-color: var(--color-error);   background: var(--color-error);   box-shadow: inset 0 0 0 3px white; }
+  .quiz-feedback { max-height: 0; overflow: hidden; opacity: 0; transition: max-height var(--duration-normal), opacity var(--duration-normal); font-size: var(--text-sm); border-radius: var(--radius-sm); }
+  .quiz-feedback.show { max-height: 240px; opacity: 1; padding: var(--space-3); margin-top: var(--space-2); }
+  .quiz-feedback.success { background: var(--color-success-light); color: var(--color-success); }
+  .quiz-feedback.error   { background: var(--color-error-light);   color: var(--color-error); }
+  .quiz-feedback.warning { background: var(--color-info-light);    color: var(--color-info); }
+  .quiz-check-btn, .quiz-reset-btn { margin-top: var(--space-6); padding: var(--space-3) var(--space-6); border-radius: var(--radius-sm); font-family: var(--font-body); font-size: var(--text-sm); font-weight: 600; cursor: pointer; border: none; transition: background var(--duration-fast), transform var(--duration-fast); }
+  .quiz-check-btn { background: var(--color-accent); color: white; margin-right: var(--space-3); }
+  .quiz-check-btn:hover { background: var(--color-accent-hover); transform: translateY(-1px); }
+  .quiz-reset-btn { background: var(--color-surface); color: var(--color-text-secondary); border: 1px solid var(--color-border); }
+  .quiz-reset-btn:hover { border-color: var(--color-accent-muted); }
+
+  /* ── DND ── */
+  .dnd-container { margin: var(--space-8) 0; }
+  .dnd-chips { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-bottom: var(--space-6); }
+  .dnd-chip { padding: var(--space-2) var(--space-4); background: var(--color-accent); color: white; border-radius: var(--radius-full); font-size: var(--text-sm); font-weight: 600; cursor: grab; user-select: none; transition: opacity var(--duration-fast), transform var(--duration-fast); }
+  .dnd-chip:active { cursor: grabbing; transform: scale(1.05); }
+  .dnd-chip.dragging { opacity: 0.4; }
+  .dnd-chip.placed { opacity: 0.3; pointer-events: none; }
+  .dnd-zones { display: flex; flex-direction: column; gap: var(--space-4); }
+  .dnd-zone { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); background: var(--color-surface); }
+  .dnd-zone-label { font-size: var(--text-sm); color: var(--color-text-secondary); margin-bottom: var(--space-3); }
+  .dnd-zone-target { min-height: 40px; border: 2px dashed var(--color-border); border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; font-size: var(--text-sm); color: var(--color-text-muted); transition: border-color var(--duration-fast), background var(--duration-fast); }
+  .dnd-zone-target.drag-over { border-color: var(--color-accent); background: var(--color-accent-light); }
+  .dnd-zone-target.correct-placed { border-color: var(--color-success); background: var(--color-success-light); color: var(--color-success); font-weight: 600; }
+  .dnd-zone-target.incorrect-placed{ border-color: var(--color-error); background: var(--color-error-light); }
+  .btn { padding: var(--space-2) var(--space-5); border-radius: var(--radius-sm); border: 1px solid var(--color-border); background: var(--color-surface); font-family: var(--font-body); font-size: var(--text-sm); font-weight: 600; cursor: pointer; transition: all var(--duration-fast); color: var(--color-text-secondary); }
+  .btn:hover { border-color: var(--color-accent-muted); color: var(--color-accent); }
+  .btn-primary { background: var(--color-accent); color: white; border-color: var(--color-accent); }
+  .btn-primary:hover { background: var(--color-accent-hover); border-color: var(--color-accent-hover); color: white; }
+
+  /* ── GLOSSARY ── */
+  .term { border-bottom: 1.5px dashed var(--color-accent-muted); cursor: pointer; }
+  .term:hover, .term.active { border-bottom-color: var(--color-accent); color: var(--color-accent); }
+  .term-tooltip { position: fixed; background: var(--color-bg-code); color: #CDD6F4; padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); font-size: var(--text-sm); font-family: var(--font-body); line-height: var(--leading-normal); width: max(200px, min(320px, 80vw)); box-shadow: var(--shadow-lg); pointer-events: none; opacity: 0; transition: opacity var(--duration-fast); z-index: 10000; }
+  .term-tooltip::after { content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 6px solid transparent; border-top-color: var(--color-bg-code); }
+  .term-tooltip.visible { opacity: 1; }
+  .term-tooltip.flip::after { top: auto; bottom: 100%; border-top-color: transparent; border-bottom-color: var(--color-bg-code); }
+
+  .footer { text-align: center; padding: var(--space-16) var(--space-6); color: var(--color-text-muted); font-size: var(--text-sm); border-top: 1px solid var(--color-border-light); }
+
+  @media (max-width: 768px) {
+    :root { --text-4xl: 1.875rem; --text-5xl: 2.25rem; --text-6xl: 3rem; }
+    .translation-block { grid-template-columns: 1fr; }
+    .translation-english { border-left: none; border-top: 3px solid var(--color-accent); }
+    .pattern-cards { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 480px) {
+    :root { --text-4xl: 1.5rem; --text-5xl: 1.875rem; --text-6xl: 2.25rem; }
+    .module { padding: var(--space-8) var(--space-4); }
+    .pattern-cards { grid-template-columns: 1fr; }
+    .nav-title { max-width: 150px; }
+  }
+
+  @keyframes packetMove {
+    from { left: var(--packet-from-x); top: var(--packet-from-y); opacity: 0; }
+    20%  { opacity: 1; }
+    80%  { opacity: 1; }
+    to   { left: var(--packet-to-x); top: var(--packet-to-y); opacity: 0; }
+  }
+  </style>
+</head>
+<body>
+
+  <style>
+  body { background: var(--color-bg); }
+  .page { max-width: var(--content-width-wide); margin: 0 auto; padding: var(--space-12) var(--space-6) var(--space-16); }
+  .page-head { margin-bottom: var(--space-8); }
+  .page-eyebrow { font-family: var(--font-mono); font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.15em; color: var(--color-accent); margin-bottom: var(--space-3); }
+  .page-title { font-family: var(--font-display); font-size: var(--text-5xl); font-weight: 800; line-height: 1.05; margin-bottom: var(--space-4); }
+  .page-intro { font-size: var(--text-lg); color: var(--color-text-secondary); max-width: 70ch; }
+
+  .board { background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-6); box-shadow: var(--shadow-md); }
+  .board-svg { width: 100%; height: auto; display: block; }
+  .route { fill: none; stroke-width: 3.5; transition: stroke var(--duration-normal), opacity var(--duration-normal), stroke-width var(--duration-normal); }
+  .route.allow { stroke: #2D8B55; opacity: 0.95; }
+  .route.block { stroke: #C93B3B; opacity: 0.28; stroke-width: 2.5; stroke-dasharray: 8 7; }
+  .svg-hidden { display: none; }
+  .bnode { stroke-width: 2.5; }
+  .bnode.has   { stroke: #3B6EA5; }
+  .bnode.plain { stroke: #BDB7AC; }
+  .bnode.subj  { fill: var(--color-surface); }
+  .bnode.agg   { fill: var(--color-bg-warm); }
+  .bnode.agg.has { fill: #EAF1F9; }
+  .bnode-title { font-family: var(--font-display); font-weight: 700; font-size: 17px; fill: var(--color-text); }
+  .bnode-sub   { font-family: var(--font-mono); font-size: 11.5px; fill: var(--color-text-secondary); }
+  .bnode-mono  { font-family: var(--font-mono); font-size: 10px; font-weight: 600; fill: #2B5C92; }
+
+  .filter-groups { display: flex; flex-direction: column; gap: var(--space-3); margin-top: var(--space-6); }
+  .filter-group { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); }
+  .filter-cat { font-family: var(--font-mono); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.06em; color: var(--color-text-muted); min-width: 168px; }
+  .filter-btn { padding: var(--space-2) var(--space-4); border-radius: var(--radius-full); border: 1.5px solid var(--color-border); background: var(--color-surface); font-family: var(--font-body); font-size: var(--text-sm); font-weight: 600; cursor: pointer; transition: all var(--duration-fast); color: var(--color-text-secondary); }
+  .filter-btn:hover { border-color: var(--color-accent-muted); color: var(--color-accent); }
+  .filter-btn.active { border-color: var(--color-accent); background: var(--color-accent-light); color: var(--color-accent-hover); }
+
+  .board-note { margin-top: var(--space-4); font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+  .board-summary { margin-top: var(--space-4); padding: var(--space-5); background: var(--color-accent-light); border-left: 4px solid var(--color-accent); border-radius: var(--radius-md); font-size: var(--text-sm); line-height: var(--leading-normal); }
+
+  .matrix { width: 100%; border-collapse: collapse; margin-top: var(--space-6); font-size: var(--text-sm); }
+  .matrix th, .matrix td { padding: var(--space-3) var(--space-4); border: 1px solid var(--color-border-light); text-align: left; vertical-align: top; }
+  .matrix thead th { font-family: var(--font-mono); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.05em; color: var(--color-text-muted); background: var(--color-surface-warm); }
+  .matrix tbody th { font-family: var(--font-display); font-weight: 700; }
+  .matrix td.cell { transition: background var(--duration-normal); }
+  .matrix td.cell.ok  { background: var(--color-success-light); }
+  .matrix td.cell.bad { background: var(--color-error-light); }
+  .matrix .verdict { font-family: var(--font-display); font-weight: 800; font-size: var(--text-lg); display: block; }
+  .matrix .verdict.ok  { color: var(--color-success); }
+  .matrix .verdict.bad { color: var(--color-error); }
+  .matrix .why { display: block; margin-top: 4px; font-size: var(--text-xs); color: var(--color-text-secondary); line-height: 1.45; }
+
+  .board-legend { display: flex; flex-wrap: wrap; gap: var(--space-4); margin-top: var(--space-4); font-size: var(--text-xs); color: var(--color-text-secondary); font-family: var(--font-mono); }
+  .board-legend span { display: inline-flex; align-items: center; gap: 6px; }
+  .board-legend i { width: 16px; height: 4px; border-radius: 2px; display: inline-block; }
+  @media (max-width: 600px) { .filter-cat { min-width: 0; width: 100%; } }
+  </style>
+
+  <div class="page">
+    <header class="page-head">
+      <div class="page-eyebrow">OpenStack Nova &middot; Aggregate scheduling &middot; Caracal</div>
+      <h1 class="page-title">Aggregate routing &mdash; who lands where?</h1>
+      <p class="page-intro">Pick a filter below. Green solid = the boot is allowed there; red dashed = blocked. The matrix gives the exact reason per cell.</p>
+    </header>
+
+    <div class="board">
+      <svg class="board-svg" viewBox="0 0 1000 440" id="board" role="img" aria-label="Routing board: subjects to aggregate host groups">
+        <defs>
+          <marker id="arrow-allow" markerWidth="10" markerHeight="10" refX="7" refY="3" orient="auto" markerUnits="userSpaceOnUse"><path d="M0,0 L7,3 L0,6 Z" fill="#2D8B55"/></marker>
+        </defs>
+
+        <!-- direct routes are perfectly horizontal; crossing routes are symmetric curves -->
+        <path id="eAA" class="route allow" d="M280,118 L700,118" marker-end="url(#arrow-allow)"></path>
+        <path id="eAB" class="route allow" d="M280,148 C470,148 510,312 700,312" marker-end="url(#arrow-allow)"></path>
+        <path id="eBA" class="route allow" d="M280,312 C470,312 510,148 700,148" marker-end="url(#arrow-allow)"></path>
+        <path id="eBB" class="route allow" d="M280,342 L700,342" marker-end="url(#arrow-allow)"></path>
+        <!-- third subject's routes (image filter only) -->
+        <path id="eCA" class="route allow svg-hidden" d="M280,222 C470,222 540,165 700,165" marker-end="url(#arrow-allow)"></path>
+        <path id="eCB" class="route allow svg-hidden" d="M280,250 C470,250 540,300 700,300" marker-end="url(#arrow-allow)"></path>
+
+        <!-- subject A (has the property) -->
+        <g>
+          <rect class="bnode subj has" x="40" y="80" width="240" height="100" rx="14"></rect>
+          <text class="bnode-title" id="subjA-title" x="160" y="116" text-anchor="middle">Flavor A</text>
+          <text class="bnode-sub"   id="subjA-sub"   x="160" y="137" text-anchor="middle">has extra_spec</text>
+          <text class="bnode-mono"  id="subjA-meta"  x="160" y="159" text-anchor="middle">special-hw=true</text>
+        </g>
+        <!-- subject C (middle) — image filter only: the conflicting-value case -->
+        <g id="grpC" class="svg-hidden">
+          <rect class="bnode subj has" x="40" y="198" width="240" height="74" rx="14"></rect>
+          <text class="bnode-title" id="subjC-title" x="160" y="228" text-anchor="middle">Image 2</text>
+          <text class="bnode-mono"  id="subjC-sub"   x="160" y="250" text-anchor="middle">license=linux</text>
+        </g>
+        <!-- subject B (no property) -->
+        <g>
+          <rect class="bnode subj plain" x="40" y="280" width="240" height="100" rx="14"></rect>
+          <text class="bnode-title" id="subjB-title" x="160" y="324" text-anchor="middle">Flavor B</text>
+          <text class="bnode-sub"   id="subjB-sub"   x="160" y="346" text-anchor="middle">(no extra_spec)</text>
+        </g>
+        <!-- aggregate A (reserved) -->
+        <g>
+          <rect class="bnode agg has" x="700" y="66" width="280" height="138" rx="16"></rect>
+          <text class="bnode-title" x="840" y="96" text-anchor="middle">Aggregate A</text>
+          <text class="bnode-mono"  id="aggA-meta" x="840" y="120" text-anchor="middle">special-hw=true</text>
+          <text class="bnode-sub"   x="840" y="174" text-anchor="middle">hA1 &middot; hA2</text>
+        </g>
+        <!-- aggregate B (allow-all) -->
+        <g>
+          <rect class="bnode agg plain" x="700" y="270" width="280" height="120" rx="16"></rect>
+          <text class="bnode-title" x="840" y="312" text-anchor="middle">Aggregate B</text>
+          <text class="bnode-sub"   x="840" y="336" text-anchor="middle">(no metadata &middot; allow-all)</text>
+          <text class="bnode-sub"   x="840" y="362" text-anchor="middle">hB1 &middot; hB2</text>
+        </g>
+      </svg>
+
+      <div class="filter-groups">
+        <div class="filter-group">
+          <span class="filter-cat">Flavor &harr; host</span>
+          <button class="filter-btn active" data-key="extraspecs">AggregateInstanceExtraSpecsFilter</button>
+          <button class="filter-btn" data-key="typeaffinity">AggregateTypeAffinityFilter</button>
+          <button class="filter-btn" data-key="flavorcombined">Both combined</button>
+        </div>
+        <div class="filter-group">
+          <span class="filter-cat">Image &harr; host</span>
+          <button class="filter-btn" data-key="aggimage">AggregateImagePropertiesIsolation</button>
+        </div>
+        <div class="filter-group">
+          <span class="filter-cat">Project &harr; host</span>
+          <button class="filter-btn" data-key="reqtenant">Tenant Isolation with Placement</button>
+          <button class="filter-btn" data-key="multitenancy">NectarAggregateMultiTenancyIsolation</button>
+          <button class="filter-btn" data-key="projectcombined">Both combined</button>
+        </div>
+        <div class="filter-group">
+          <span class="filter-cat">Flavor / Image (traits)</span>
+          <button class="filter-btn" data-key="isolated">Filtering hosts by isolating aggregates</button>
+        </div>
+      </div>
+
+      <div class="board-note" id="board-note"></div>
+      <div class="board-summary" id="board-summary"></div>
+
+      <table class="matrix">
+        <thead>
+          <tr><th>boot &darr; &nbsp; target &rarr;</th><th>Aggregate A (reserved)</th><th>Aggregate B (allow-all)</th></tr>
+        </thead>
+        <tbody>
+          <tr><th id="row-a-label">Subject A</th><td class="cell" id="m-eAA"></td><td class="cell" id="m-eAB"></td></tr>
+          <tr id="rowC" class="svg-hidden"><th id="row-c-label">Subject C</th><td class="cell" id="m-eCA"></td><td class="cell" id="m-eCB"></td></tr>
+          <tr><th id="row-b-label">Subject B</th><td class="cell" id="m-eBA"></td><td class="cell" id="m-eBB"></td></tr>
+        </tbody>
+      </table>
+
+      <div class="board-legend">
+        <span><i style="background:#2D8B55"></i> allowed (lands here)</span>
+        <span><i style="background:#C93B3B"></i> blocked (rejected)</span>
+        <span>A = subject with the property/trait/tenant &nbsp; B = without</span>
+      </div>
+    </div>
+  </div>
+  <script>
+  (function () {
+    function $(s, c) { return (c || document).querySelector(s); }
+    function $$(s, c) { return Array.from((c || document).querySelectorAll(s)); }
+    var board = $('#board');
+    if (!board) return;
+
+    var MODES = {
+      extraspecs: {
+        subjA: { title: 'Flavor 1', sub: 'extra_spec', meta: 'special-hw=true' },
+        subjC: { title: 'Flavor 2', sub: 'special-hw=gpu' },
+        subjB: { title: 'Flavor 3', sub: '(no extra_spec)', meta: '' },
+        aggMeta: 'special-hw=true',
+        note: 'AggregateInstanceExtraSpecsFilter — Agg A metadata: special-hw=true. Three flavors: a matching value, a different value, and none. Click AggregateImagePropertiesIsolation to compare the same three cases for images.',
+        summary: '<strong>flavor &rarr; host.</strong> This filter loops the flavor\'s specs, so naming the key is a DEMAND: Flavor 1 (matching) lands only on Agg A and is rejected from Agg B; Flavor 2 (different value) is rejected everywhere. Only Flavor 3 (no spec) passes anywhere &mdash; and leaks onto the reserved Agg A. <a href="https://docs.openstack.org/nova/latest/admin/scheduling.html#aggregateinstanceextraspecsfilter" target="_blank" rel="noopener">docs &#8599;</a>',
+        eAA: { s: 'allow', why: 'special-hw=true matches Agg A value &rarr; allowed' },
+        eAB: { s: 'block', why: 'Agg B lacks the key &rarr; flavor demands it &rarr; rejected (CONFINED &mdash; an image would be allowed here)' },
+        eCA: { s: 'block', why: 'special-hw=gpu &ne; true &rarr; value mismatch &rarr; rejected' },
+        eCB: { s: 'block', why: 'Agg B lacks the key &rarr; rejected (an image would be allowed here)' },
+        eBA: { s: 'allow', why: 'no extra_spec &rarr; early return True &rarr; leaks onto reserved Agg A' },
+        eBB: { s: 'allow', why: 'no requirement &rarr; allowed' }
+      },
+      typeaffinity: {
+        subjA: { title: 'Flavor A', sub: 'name match', meta: '' },
+        subjB: { title: 'Flavor B', sub: '(name not listed)', meta: '' },
+        aggMeta: 'instance_type=FlavorA',
+        note: 'AggregateTypeAffinityFilter — Agg A metadata: instance_type=FlavorA (a comma-list of flavor NAMES). Agg B has no instance_type.',
+        summary: '<strong>host &rarr; flavor.</strong> Aggregate A accepts only the flavor names in its instance_type list, so Flavor B is rejected &mdash; the host IS reserved. But Flavor A can still land on Aggregate B, which has no list (return not vals &rarr; True). Opposite asymmetry to ExtraSpecs. <a href="https://docs.openstack.org/nova/latest/admin/scheduling.html#aggregatetypeaffinityfilter" target="_blank" rel="noopener">docs &#8599;</a>',
+        eAA: { s: 'allow', why: 'Flavor A name is in Agg A instance_type list' },
+        eAB: { s: 'allow', why: 'Agg B has no list &rarr; return not vals &rarr; True (A leaks into B)' },
+        eBA: { s: 'block', why: 'Agg A list set, Flavor B name not in it &rarr; rejected' },
+        eBB: { s: 'allow', why: 'Agg B has no list &rarr; allowed' }
+      },
+      flavorcombined: {
+        subjA: { title: 'Flavor A', sub: 'spec + name match', meta: 'special-hw=true' },
+        subjB: { title: 'Flavor B', sub: '(no spec, other name)', meta: '' },
+        aggMeta: 'special-hw=true + instance_type=FlavorA',
+        note: 'Both flavor filters enabled together. No [scheduler] toggle required; both live in enabled_filters.',
+        summary: '<strong>flavor &harr; host.</strong> ExtraSpecs confines Flavor A to Agg A; TypeAffinity reserves Agg A for Flavor A. Both off-diagonals are blocked &mdash; a clean 1:1 lock (A&harr;Agg A, B&harr;Agg B). Caveat: flavor-name based, no image coverage.',
+        eAA: { s: 'allow', why: 'ExtraSpecs &#10003; and TypeAffinity &#10003;' },
+        eAB: { s: 'block', why: 'ExtraSpecs &#10007; (Agg B lacks the key)' },
+        eBA: { s: 'block', why: 'TypeAffinity &#10007; (Flavor B not in Agg A list)' },
+        eBB: { s: 'allow', why: 'both filters pass' }
+      },
+      aggimage: {
+        subjA: { title: 'Image 1', sub: 'image property', meta: 'license=windows' },
+        subjC: { title: 'Image 2', sub: 'license=linux' },
+        subjB: { title: 'Image 3', sub: '(no license prop)', meta: '' },
+        aggMeta: 'license=windows',
+        note: 'AggregateImagePropertiesIsolation — Agg A metadata: license=windows. The filter loops over the HOST metadata and only rejects on an explicit value conflict.',
+        summary: '<strong>weak / conflict-only.</strong> Of the three images, ONLY Image 2 (license=linux, a conflicting value) is blocked &mdash; and only on Agg A. Image 1 (matching) is not confined: it also lands on Agg B. Image 3 (no property) is never rejected, so it lands on the reserved Agg A too (bug 1677217). The filter enforces neither hard direction; for real image isolation use the trait filter: Filtering hosts by isolating aggregates. <a href="https://docs.openstack.org/nova/2024.1/reference/isolate-aggregates.html" target="_blank" rel="noopener">docs &#8599;</a>',
+        eAA: { s: 'allow', why: 'license=windows matches host metadata &rarr; allowed' },
+        eAB: { s: 'allow', why: 'Agg B has no license key &rarr; not checked (Image 1 not confined)' },
+        eCA: { s: 'block', why: 'license=linux conflicts with host license=windows &rarr; rejected (the only block)' },
+        eCB: { s: 'allow', why: 'Agg B has no license key &rarr; conflict never tested &rarr; allowed' },
+        eBA: { s: 'allow', why: 'image has no license prop &rarr; never rejected (bug 1677217) &rarr; lands on reserved Agg A' },
+        eBB: { s: 'allow', why: 'no key on host &rarr; allowed' }
+      },
+      reqtenant: {
+        subjA: { title: 'Project P', sub: 'booting tenant', meta: 'project_id = P' },
+        subjB: { title: 'Project Q', sub: 'a different tenant', meta: '' },
+        aggMeta: 'filter_tenant_id1=P',
+        note: 'Agg A metadata uses numbered keys, one per project: filter_tenant_id1=<project_id_1>, filter_tenant_id2=<project_id_2>, filter_tenant_id3=<project_id_3>. Needs limit_tenants_to_placement_aggregate=true.',
+        summary: '<strong>project &rarr; host &mdash; "Tenant Isolation with Placement".</strong> The request filter forces P\'s request into aggregates tagged for P, so P cannot use Agg B (confined). It does not stop tenant Q from using Agg A &mdash; the host is not reserved. Note the metadata differs from the Nectar filter: numbered keys (filter_tenant_id1, filter_tenant_id2, &hellip;), no nectar: prefix. <a href="https://docs.openstack.org/nova/2024.1/admin/aggregates.html#tenant-isolation-with-placement" target="_blank" rel="noopener">docs &#8599;</a>',
+        eAA: { s: 'allow', why: 'P is forced into its tagged aggregate (Agg A)' },
+        eAB: { s: 'block', why: 'Agg B not tagged for P &rarr; P confined away from it' },
+        eBA: { s: 'allow', why: 'Q is not constrained out of Agg A &rarr; leaks onto reserved host' },
+        eBB: { s: 'allow', why: 'no constraint &rarr; allowed' }
+      },
+      multitenancy: {
+        subjA: { title: 'Project P', sub: 'allowed tenant', meta: 'project_id = P' },
+        subjB: { title: 'Project Q', sub: 'other tenant', meta: '' },
+        aggMeta: 'nectar:filter_tenant_id=P',
+        note: 'NectarAggregateMultiTenancyIsolation — Agg A metadata: nectar:filter_tenant_id is one comma-separated key holding up to 7 project ids (e.g. nectar:filter_tenant_id=P or P,Q,R …). A plain filter in enabled_filters.',
+        summary: '<strong>host &rarr; project.</strong> A host whose aggregate carries nectar:filter_tenant_id only accepts those tenants, so Q is rejected from Agg A &mdash; the host IS reserved. But P can still use Agg B. Mirror of old filter AggregateMultiTenancyIsolation <a href="https://docs.openstack.org/nova/latest/admin/scheduling.html#aggregatemultitenancyisolation" target="_blank" rel="noopener">docs &#8599;</a>',
+        eAA: { s: 'allow', why: 'P is in Agg A filter_tenant_id list' },
+        eAB: { s: 'allow', why: 'Agg B has no tenant restriction (P leaks into B)' },
+        eBA: { s: 'block', why: 'Agg A restricted to P &rarr; Q rejected' },
+        eBB: { s: 'allow', why: 'no restriction &rarr; allowed' }
+      },
+      projectcombined: {
+        subjA: { title: 'Project P', sub: 'tenant P', meta: 'project_id = P' },
+        subjB: { title: 'Project Q', sub: 'other tenant', meta: '' },
+        aggMeta: 'nectar:filter_tenant_id + filter_tenant_idN',
+        note: 'Both tenant mechanisms together. Each reads a DIFFERENT key: NectarAggregateMultiTenancyIsolation uses nectar:filter_tenant_id=<ids>; require_tenant_aggregate uses filter_tenant_id1/2/3=<id>.',
+        summary: '<strong>project &harr; host.</strong> require_tenant_aggregate confines P to Agg A; NectarAggregateMultiTenancyIsolation reserves Agg A for P. Both off-diagonals blocked &mdash; a clean 1:1 lock by project.',
+        eAA: { s: 'allow', why: 'P forced in, and P is allowed &rarr; both pass' },
+        eAB: { s: 'block', why: 'P confined away from untagged Agg B' },
+        eBA: { s: 'block', why: 'Agg A reserved for P &rarr; Q rejected' },
+        eBB: { s: 'allow', why: 'Q unconstrained on allow-all Agg B' }
+      },
+      isolated: {
+        subjA: { title: 'Flavor/Image A', sub: 'requires trait', meta: 'trait:CUSTOM_X=required' },
+        subjB: { title: 'Flavor/Image B', sub: '(no trait)', meta: '' },
+        aggMeta: 'trait:CUSTOM_X=required',
+        note: 'Agg A metadata: trait:CUSTOM_X=required; Agg A hosts expose CUSTOM_X. The trait ALONE already routes trait-requiring workloads to these hosts; enable_isolated_aggregate_filtering=true is what makes the aggregate EXCLUSIVE (it then also rejects workloads that lack the trait).',
+        summary: '<strong>flavor / image &harr; host, from ONE trait.</strong> With the trait on the flavor/image and exposed by the hosts, Placement already routes trait-requiring workloads to Agg A. Turning on enable_isolated_aggregate_filtering adds the reverse lock: the filter then forbids Agg A for workloads WITHOUT the trait (B). Without the toggle the trait still works &mdash; the aggregate is just not exclusive. One trait covers both flavors and images. <a href="https://docs.openstack.org/nova/2024.1/reference/isolate-aggregates.html" target="_blank" rel="noopener">docs &#8599;</a>',
+        eAA: { s: 'allow', why: 'Agg A hosts expose CUSTOM_X; A requires it' },
+        eAB: { s: 'block', why: 'Agg B hosts lack the trait &rarr; Placement excludes' },
+        eBA: { s: 'block', why: 'Agg A requires a trait B lacks &rarr; aggregate forbidden' },
+        eBB: { s: 'allow', why: 'no trait required &rarr; allowed' }
+      }
+    };
+
+    var buttons = $$('.filter-btn');
+
+    function setText(id, txt) { var el = $('#' + id); if (el) el.textContent = txt; }
+    function setMeta(text) {
+      var el = $('#aggA-meta'); if (!el) return;
+      while (el.firstChild) el.removeChild(el.firstChild);
+      var x = el.getAttribute('x');
+      String(text).split('\n').forEach(function (ln, i) {
+        var t = document.createElementNS('http://www.w3.org/2000/svg', 'tspan');
+        t.setAttribute('x', x); t.setAttribute('dy', i === 0 ? '0' : '13');
+        t.textContent = ln; el.appendChild(t);
+      });
+    }
+    function setHidden(id, hidden) { var el = $('#' + id); if (el) el.classList.toggle('svg-hidden', hidden); }
+
+    function apply(key) {
+      var m = MODES[key];
+      buttons.forEach(function (b) { b.classList.toggle('active', b.dataset.key === key); });
+
+      // dynamic node labels
+      setText('subjA-title', m.subjA.title);
+      setText('subjA-sub', m.subjA.sub);
+      setText('subjA-meta', m.subjA.meta || '');
+      setText('subjB-title', m.subjB.title);
+      setText('subjB-sub', m.subjB.sub);
+      setMeta(m.aggMeta);
+      setText('row-a-label', m.subjA.title);
+      setText('row-b-label', m.subjB.title);
+
+      // optional third subject (image filter: the conflicting-value case)
+      var hasC = !!m.subjC;
+      ['grpC', 'eCA', 'eCB', 'rowC'].forEach(function (id) { setHidden(id, !hasC); });
+      if (hasC) {
+        setText('subjC-title', m.subjC.title);
+        setText('subjC-sub', m.subjC.sub);
+        setText('row-c-label', m.subjC.title);
+      }
+
+      // edges + matrix
+      var EDGES = hasC ? ['eAA', 'eAB', 'eBA', 'eBB', 'eCA', 'eCB'] : ['eAA', 'eAB', 'eBA', 'eBB'];
+      EDGES.forEach(function (id) {
+        var cell = m[id];
+        var path = $('#' + id, board);
+        var ok = cell.s === 'allow';
+        path.classList.toggle('allow', ok);
+        path.classList.toggle('block', !ok);
+        if (ok) path.setAttribute('marker-end', 'url(#arrow-allow)');
+        else path.removeAttribute('marker-end');
+        var td = $('#m-' + id);
+        td.className = 'cell ' + (ok ? 'ok' : 'bad');
+        td.innerHTML = '<span class="verdict ' + (ok ? 'ok' : 'bad') + '">' + (ok ? '&#10003; allowed' : '&#10007; blocked') + '</span><span class="why">' + cell.why + '</span>';
+      });
+
+      $('#board-note').textContent = m.note;
+      $('#board-summary').innerHTML = m.summary;
+    }
+
+    buttons.forEach(function (b) { b.addEventListener('click', function () { apply(b.dataset.key); }); });
+    apply('extraspecs');
+  })();
+  </script>
+</body>
+</html>

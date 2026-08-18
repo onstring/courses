@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenStack Neutron — OVN Walkthroughs</title>
+<style>
+  :root {
+    --ivory:  #FAF9F5;
+    --paper:  #FFFFFF;
+    --slate:  #141413;
+    --clay:   #D97757;
+    --clay-d: #B85C3E;
+    --oat:    #E3DACC;
+    --olive:  #788C5D;
+    --g100:   #F0EEE6;
+    --g200:   #E6E3DA;
+    --g300:   #D1CFC5;
+    --g500:   #87867F;
+    --g700:   #3D3D3A;
+
+    --serif: ui-serif, Georgia, "Times New Roman", Times, serif;
+    --sans:  system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono:  ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--ivory);
+    color: var(--slate);
+    font-family: var(--sans);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::-webkit-scrollbar { width: 9px; }
+  ::-webkit-scrollbar-thumb { background: var(--g300); border-radius: 999px; }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 32px; }
+
+  /* ── HEADER ── */
+  header { padding: 80px 0 56px; border-bottom: 1.5px solid var(--g200); }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; text-transform: uppercase;
+    letter-spacing: 0.16em; color: var(--clay-d); margin-bottom: 22px;
+  }
+  h1 {
+    font-family: var(--serif); font-weight: 500;
+    font-size: clamp(38px, 5.4vw, 62px); line-height: 1.04;
+    letter-spacing: -0.01em; max-width: 17ch;
+  }
+  h1 em { font-style: italic; color: var(--clay); }
+  .intro {
+    margin-top: 26px; max-width: 64ch; font-size: 16.5px; color: var(--g700);
+  }
+  .intro code {
+    font-family: var(--mono); font-size: 0.86em; background: var(--g100);
+    border: 1px solid var(--g200); border-radius: 5px; padding: 1px 6px;
+  }
+  .toc { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 30px; }
+  .toc a {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12.5px; text-decoration: none; color: var(--slate);
+    background: var(--paper); border: 1.5px solid var(--g300);
+    border-radius: 999px; padding: 7px 14px; transition: all 0.16s ease;
+  }
+  .toc a:hover { border-color: var(--slate); }
+  .toc a .n { font-family: var(--mono); font-size: 11px; color: var(--g500); }
+  .toc a:hover .n { color: var(--clay-d); }
+
+  /* ── SECTION ── */
+  section { margin-top: 64px; }
+  .sec-head { display: flex; align-items: baseline; gap: 16px; margin-bottom: 28px; }
+  .sec-idx { font-family: var(--mono); font-size: 12px; color: var(--g500); letter-spacing: 0.1em; }
+  .sec-head h2 { font-family: var(--serif); font-weight: 500; font-size: 27px; }
+  .sec-head .count {
+    font-family: var(--mono); font-size: 11px; color: var(--g500);
+    border: 1px solid var(--g300); border-radius: 999px; padding: 2px 9px;
+  }
+  .sec-desc { max-width: 70ch; font-size: 14.5px; color: var(--g700); margin: -14px 0 28px; }
+
+  /* ── CARD GRID ── */
+  .grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(316px, 1fr));
+    gap: 20px;
+  }
+  .card {
+    display: flex; flex-direction: column;
+    background: var(--paper); border: 1.5px solid var(--g300); border-radius: 14px;
+    text-decoration: none; color: inherit; overflow: hidden;
+    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+  }
+  .card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 10px 30px rgba(20,20,19,0.10);
+    border-color: var(--slate);
+  }
+  .thumb {
+    height: 132px; display: flex; align-items: center; justify-content: center;
+    position: relative; border-bottom: 1.5px solid var(--g200);
+    background: var(--accent-soft, var(--g100));
+    transition: background 0.18s ease;
+  }
+  .thumb .glyph { font-size: 46px; line-height: 1; filter: saturate(1.05); }
+  .thumb .badge {
+    position: absolute; top: 12px; left: 14px;
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    color: #fff; background: var(--accent, var(--slate));
+    border-radius: 6px; padding: 2px 8px; letter-spacing: 0.04em;
+  }
+  .card:hover .thumb { background: var(--oat); }
+  .body { flex: 1; padding: 18px 20px 20px; display: flex; flex-direction: column; }
+  .title { font-family: var(--serif); font-size: 19px; font-weight: 500; line-height: 1.2; }
+  .desc { margin-top: 9px; font-size: 13.5px; color: var(--g700); }
+  .meta {
+    margin-top: 14px; display: flex; flex-wrap: wrap; gap: 7px;
+  }
+  .meta span {
+    font-family: var(--mono); font-size: 10.5px; color: var(--g500);
+    background: var(--g100); border-radius: 5px; padding: 2px 7px;
+  }
+  .file {
+    margin-top: 16px; font-family: var(--mono); font-size: 11px; color: var(--g500);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .file .arrow { transition: transform 0.18s ease, color 0.18s ease; }
+  .card:hover .file { color: var(--accent, var(--clay-d)); }
+  .card:hover .file .arrow { transform: translateX(4px); color: var(--accent, var(--clay)); }
+
+  /* ── FOOTER ── */
+  footer {
+    margin-top: 80px; padding: 36px 0 60px; border-top: 1.5px solid var(--g200);
+    font-size: 13px; color: var(--g500);
+  }
+  footer code { font-family: var(--mono); font-size: 0.92em; color: var(--g700); }
+
+  @media (max-width: 620px) {
+    .wrap { padding: 0 20px; }
+    header { padding: 56px 0 40px; }
+    .grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+
+    <header>
+      <div class="eyebrow">OpenStack Neutron · OVN walkthroughs</div>
+      <h1>How Neutron <em>really</em> wires it, traced from the source</h1>
+      <p class="intro">
+        Two self-contained, interactive courses that follow real requests through
+        <strong>neutron-server</strong>, the <strong>ML2 OVN mechanism driver</strong>, the
+        <strong>OVN Northbound and Southbound databases</strong> and the per-hypervisor
+        <strong>ovn-controller</strong> and <strong>metadata agent</strong>.
+        Every code excerpt is an exact quote from the Neutron source on branch
+        <code>nectar/2024.1</code> (OpenStack 2024.1 / Caracal). Scroll-based modules, animated
+        message flows, glossaries and quizzes throughout.
+      </p>
+      <nav class="toc">
+        <a href="#courses"><span class="n">00</span> Booting an instance</a>
+        <a href="#courses"><span class="n">01</span> Networks, routers &amp; floating IPs</a>
+      </nav>
+    </header>
+
+    <section id="courses">
+      <div class="sec-head">
+        <span class="sec-idx">01</span>
+        <h2>The courses</h2>
+        <span class="count">2 walkthroughs</span>
+      </div>
+      <p class="sec-desc">
+        Start with <strong>Booting an instance</strong> for the boot-time story: how a port is
+        created, bound and brought up, ending in the <code style="font-family:var(--mono);font-size:.92em">network-vif-plugged</code>
+        event Nova waits for. The second course covers the network's shape: project networks,
+        distributed routers, SNAT and floating IPs.
+      </p>
+
+      <div class="grid">
+
+        <a class="card" href="00-instance-boot-ovn.html" style="--accent:#2A7B9B; --accent-soft:#E4F2F7;">
+          <div class="thumb"><span class="badge">00</span><span class="glyph">🔌</span></div>
+          <div class="body">
+            <div class="title">Plugged In: booting an instance</div>
+            <p class="desc">From <code style="font-family:var(--mono);font-size:.9em">POST /v2.0/ports</code> to <code style="font-family:var(--mono);font-size:.9em">network-vif-plugged</code>: port creation, binding, the provisioning-block checklist, the OVSDB event chain, native DHCP and the metadata namespace. The best place to start.</p>
+            <div class="meta"><span>~20 min</span><span>6 modules</span><span>create · bind · vif-plugged</span><span>ops checks</span></div>
+            <div class="file">00-instance-boot-ovn.html <span class="arrow">→</span></div>
+          </div>
+        </a>
+
+        <a class="card" href="01-project-network-floating-ip.html" style="--accent:#2D8B55; --accent-soft:#E8F5EE;">
+          <div class="thumb"><span class="badge">01</span><span class="glyph">📮</span></div>
+          <div class="body">
+            <div class="title">Reaching Out: networks, routers &amp; floating IPs</div>
+            <p class="desc">Five API calls become rows: <code style="font-family:var(--mono);font-size:.9em">Logical_Switch</code>, distributed <code style="font-family:var(--mono);font-size:.9em">Logical_Router</code>, gateway-chassis election, SNAT, and the <code style="font-family:var(--mono);font-size:.9em">dnat_and_snat</code> rule behind every floating IP. Ends with three packet walks and a debugging playbook.</p>
+            <div class="meta"><span>~20 min</span><span>6 modules</span><span>SNAT · DNAT · gateway HA</span><span>ops checks</span></div>
+            <div class="file">01-project-network-floating-ip.html <span class="arrow">→</span></div>
+          </div>
+        </a>
+
+      </div>
+    </section>
+
+    <footer>
+      Traced from the OpenStack Neutron source on branch <code>nectar/2024.1</code>.
+      Code snippets are exact excerpts. Built in the codebase-to-course visual style;
+      this index is styled after Thariq Shihipar's <em>The unreasonable effectiveness of HTML</em>.
+    </footer>
+
+  </div>
+</body>
+</html>

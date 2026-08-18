@@ -1,0 +1,266 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>OpenStack Nova — Message-Flow Walkthroughs</title>
+<style>
+  :root {
+    --ivory:  #FAF9F5;
+    --paper:  #FFFFFF;
+    --slate:  #141413;
+    --clay:   #D97757;
+    --clay-d: #B85C3E;
+    --oat:    #E3DACC;
+    --olive:  #788C5D;
+    --g100:   #F0EEE6;
+    --g200:   #E6E3DA;
+    --g300:   #D1CFC5;
+    --g500:   #87867F;
+    --g700:   #3D3D3A;
+
+    --serif: ui-serif, Georgia, "Times New Roman", Times, serif;
+    --sans:  system-ui, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    --mono:  ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-behavior: smooth; }
+  body {
+    background: var(--ivory);
+    color: var(--slate);
+    font-family: var(--sans);
+    line-height: 1.55;
+    -webkit-font-smoothing: antialiased;
+  }
+  ::-webkit-scrollbar { width: 9px; }
+  ::-webkit-scrollbar-thumb { background: var(--g300); border-radius: 999px; }
+
+  .wrap { max-width: 1180px; margin: 0 auto; padding: 0 32px; }
+
+  /* ── HEADER ── */
+  header { padding: 80px 0 56px; border-bottom: 1.5px solid var(--g200); }
+  .eyebrow {
+    font-family: var(--mono); font-size: 12px; text-transform: uppercase;
+    letter-spacing: 0.16em; color: var(--clay-d); margin-bottom: 22px;
+  }
+  h1 {
+    font-family: var(--serif); font-weight: 500;
+    font-size: clamp(38px, 5.4vw, 62px); line-height: 1.04;
+    letter-spacing: -0.01em; max-width: 17ch;
+  }
+  h1 em { font-style: italic; color: var(--clay); }
+  .intro {
+    margin-top: 26px; max-width: 64ch; font-size: 16.5px; color: var(--g700);
+  }
+  .intro code {
+    font-family: var(--mono); font-size: 0.86em; background: var(--g100);
+    border: 1px solid var(--g200); border-radius: 5px; padding: 1px 6px;
+  }
+  .toc { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 30px; }
+  .toc a {
+    display: inline-flex; align-items: center; gap: 8px;
+    font-size: 12.5px; text-decoration: none; color: var(--slate);
+    background: var(--paper); border: 1.5px solid var(--g300);
+    border-radius: 999px; padding: 7px 14px; transition: all 0.16s ease;
+  }
+  .toc a:hover { border-color: var(--slate); }
+  .toc a .n { font-family: var(--mono); font-size: 11px; color: var(--g500); }
+  .toc a:hover .n { color: var(--clay-d); }
+
+  /* ── SECTION ── */
+  section { margin-top: 64px; }
+  .sec-head { display: flex; align-items: baseline; gap: 16px; margin-bottom: 28px; }
+  .sec-idx { font-family: var(--mono); font-size: 12px; color: var(--g500); letter-spacing: 0.1em; }
+  .sec-head h2 { font-family: var(--serif); font-weight: 500; font-size: 27px; }
+  .sec-head .count {
+    font-family: var(--mono); font-size: 11px; color: var(--g500);
+    border: 1px solid var(--g300); border-radius: 999px; padding: 2px 9px;
+  }
+  .sec-desc { max-width: 70ch; font-size: 14.5px; color: var(--g700); margin: -14px 0 28px; }
+
+  /* ── CARD GRID ── */
+  .grid {
+    display: grid; grid-template-columns: repeat(auto-fill, minmax(316px, 1fr));
+    gap: 20px;
+  }
+  .card {
+    display: flex; flex-direction: column;
+    background: var(--paper); border: 1.5px solid var(--g300); border-radius: 14px;
+    text-decoration: none; color: inherit; overflow: hidden;
+    transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease;
+  }
+  .card:hover {
+    transform: translateY(-3px);
+    box-shadow: 0 10px 30px rgba(20,20,19,0.10);
+    border-color: var(--slate);
+  }
+  .thumb {
+    height: 132px; display: flex; align-items: center; justify-content: center;
+    position: relative; border-bottom: 1.5px solid var(--g200);
+    background: var(--accent-soft, var(--g100));
+    transition: background 0.18s ease;
+  }
+  .thumb .glyph { font-size: 46px; line-height: 1; filter: saturate(1.05); }
+  .thumb .badge {
+    position: absolute; top: 12px; left: 14px;
+    font-family: var(--mono); font-size: 11px; font-weight: 600;
+    color: #fff; background: var(--accent, var(--slate));
+    border-radius: 6px; padding: 2px 8px; letter-spacing: 0.04em;
+  }
+  .card:hover .thumb { background: var(--oat); }
+  .body { flex: 1; padding: 18px 20px 20px; display: flex; flex-direction: column; }
+  .title { font-family: var(--serif); font-size: 19px; font-weight: 500; line-height: 1.2; }
+  .desc { margin-top: 9px; font-size: 13.5px; color: var(--g700); }
+  .meta {
+    margin-top: 14px; display: flex; flex-wrap: wrap; gap: 7px;
+  }
+  .meta span {
+    font-family: var(--mono); font-size: 10.5px; color: var(--g500);
+    background: var(--g100); border-radius: 5px; padding: 2px 7px;
+  }
+  .file {
+    margin-top: 16px; font-family: var(--mono); font-size: 11px; color: var(--g500);
+    display: flex; align-items: center; gap: 6px;
+  }
+  .file .arrow { transition: transform 0.18s ease, color 0.18s ease; }
+  .card:hover .file { color: var(--accent, var(--clay-d)); }
+  .card:hover .file .arrow { transform: translateX(4px); color: var(--accent, var(--clay)); }
+
+  /* ── FOOTER ── */
+  footer {
+    margin-top: 80px; padding: 36px 0 60px; border-top: 1.5px solid var(--g200);
+    font-size: 13px; color: var(--g500);
+  }
+  footer code { font-family: var(--mono); font-size: 0.92em; color: var(--g700); }
+
+  @media (max-width: 620px) {
+    .wrap { padding: 0 20px; }
+    header { padding: 56px 0 40px; }
+    .grid { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+
+    <header>
+      <div class="eyebrow">OpenStack Nova · Message-flow walkthroughs</div>
+      <h1>How Nova <em>really</em> works, traced from the source</h1>
+      <p class="intro">
+        Seven self-contained, interactive courses that follow a single request as it travels
+        between <strong>nova-api</strong>, <strong>conductor</strong>, <strong>scheduler</strong>
+        and <strong>compute</strong> — and out over REST to Placement, Neutron, Cinder, Glance and Cyborg.
+        Every code excerpt is an exact quote from the Nova source on branch
+        <code>nectar/2024.1</code> (OpenStack 2024.1 / Caracal); the reservation course also quotes
+        <strong>warre</strong> and <strong>blazar</strong>. Scroll-based modules, animated
+        message packets, glossaries and quizzes throughout.
+      </p>
+      <nav class="toc">
+        <a href="#courses"><span class="n">00</span> Booting a server</a>
+        <a href="#courses"><span class="n">01</span> Resize / cold migration</a>
+        <a href="#courses"><span class="n">02</span> Live migration</a>
+        <a href="#courses"><span class="n">03</span> GPU &amp; PCI devices</a>
+        <a href="#courses"><span class="n">04</span> Volume attach / detach</a>
+        <a href="#courses"><span class="n">05</span> Scheduling</a>
+        <a href="#courses"><span class="n">06</span> Reservations (warre · blazar)</a>
+      </nav>
+    </header>
+
+    <section id="courses">
+      <div class="sec-head">
+        <span class="sec-idx">01</span>
+        <h2>The courses</h2>
+        <span class="count">7 walkthroughs</span>
+      </div>
+      <p class="sec-desc">
+        Start with <strong>Booting a server</strong> for the foundations — the two message channels
+        (RPC on the queue vs REST over HTTP) and the cast of services. The others each trace one
+        operation end to end. Pick any card.
+      </p>
+
+      <div class="grid">
+
+        <a class="card" href="00-server-boot-flow.html" style="--accent:#D97757; --accent-soft:#FBEDE6;">
+          <div class="thumb"><span class="badge">00</span><span class="glyph">🚀</span></div>
+          <div class="body">
+            <div class="title">Booting a server</div>
+            <p class="desc">From <code style="font-family:var(--mono);font-size:.9em">POST /servers</code> to <code style="font-family:var(--mono);font-size:.9em">vm_state=ACTIVE</code>: the six services and two message channels that turn one command into a running VM. The best place to start.</p>
+            <div class="meta"><span>~25 min</span><span>6 services</span><span>2 channels</span><span>ops checks</span></div>
+            <div class="file">00-server-boot-flow.html <span class="arrow">→</span></div>
+          </div>
+        </a>
+
+        <a class="card" href="01-resize-cold-migration.html" style="--accent:#2A7B9B; --accent-soft:#E4F2F7;">
+          <div class="thumb"><span class="badge">01</span><span class="glyph">📦</span></div>
+          <div class="body">
+            <div class="title">Resize &amp; cold migration</div>
+            <p class="desc">Moving an instance to a new flavor or host. The migration UUID that custodies Placement allocations, the source/destination compute handshake, and the confirm-or-revert dance.</p>
+            <div class="meta"><span>~14 min</span><span>7 services</span><span>confirm / revert</span><span>ops checks</span></div>
+            <div class="file">01-resize-cold-migration.html <span class="arrow">→</span></div>
+          </div>
+        </a>
+
+        <a class="card" href="02-live-migration.html" style="--accent:#2D8B55; --accent-soft:#E8F5EE;">
+          <div class="thumb"><span class="badge">02</span><span class="glyph">🔀</span></div>
+          <div class="body">
+            <div class="title">Live migration</div>
+            <p class="desc">A zero-downtime move. The nested "can we migrate?" handshake (two blocking calls), the late network cutover, the Cinder attachment swap, and the <code style="font-family:var(--mono);font-size:.9em">JOB_COMPLETED</code> point of no return.</p>
+            <div class="meta"><span>~14 min</span><span>6+ services</span><span>call · cast · REST</span><span>ops checks</span></div>
+            <div class="file">02-live-migration.html <span class="arrow">→</span></div>
+          </div>
+        </a>
+
+        <a class="card" href="03-gpu-pci-device.html" style="--accent:#B5791B; --accent-soft:#F7EFD9;">
+          <div class="thumb"><span class="badge">03</span><span class="glyph">🎮</span></div>
+          <div class="body">
+            <div class="title">GPU &amp; PCI devices</div>
+            <p class="desc">Four device models kept distinct: legacy PCI alias, PCI-in-Placement, vGPU/mdev, and Cyborg accelerators. From flavor extra-specs to the libvirt <code style="font-family:var(--mono);font-size:.9em">&lt;hostdev&gt;</code>.</p>
+            <div class="meta"><span>~16 min</span><span>6 services</span><span>4 device models</span><span>ops checks</span></div>
+            <div class="file">03-gpu-pci-device.html <span class="arrow">→</span></div>
+          </div>
+        </a>
+
+        <a class="card" href="04-volume-attach-detach.html" style="--accent:#D94F30; --accent-soft:#FDEEE9;">
+          <div class="thumb"><span class="badge">04</span><span class="glyph">💾</span></div>
+          <div class="body">
+            <div class="title">Volume attach &amp; detach</div>
+            <p class="desc">Cinder's three-step attachment handshake (create → update → complete), the BlockDeviceMapping spine, the os-brick connector, and libvirt live hot-plug — both directions.</p>
+            <div class="meta"><span>~12 min</span><span>3 services</span><span>attachment API</span><span>ops checks</span></div>
+            <div class="file">04-volume-attach-detach.html <span class="arrow">→</span></div>
+          </div>
+        </a>
+
+        <a class="card" href="05-scheduling.html" style="--accent:#6E5FA0; --accent-soft:#EEEAF6;">
+          <div class="thumb"><span class="badge">05</span><span class="glyph">🧭</span></div>
+          <div class="body">
+            <div class="title">The scheduling procedure</div>
+            <p class="desc">How nova-scheduler picks a host: request filters that mutate the spec, Placement allocation candidates, pass/fail filters, scoring weighers, and claim-based placement with alternates. Now includes an interactive <strong>aggregate-isolation map</strong> — which filters confine a flavor, image or project to a host group, and in which direction.</p>
+            <div class="meta"><span>~16 min</span><span>9 stages</span><span>filters · weighers</span><span>aggregate isolation</span><span>ops checks</span></div>
+            <div class="file">05-scheduling.html <span class="arrow">→</span></div>
+          </div>
+        </a>
+
+        <a class="card" href="06-warre-reservation-lifecycle.html" style="--accent:#B23A5C; --accent-soft:#F8E7EC;">
+          <div class="thumb"><span class="badge">06</span><span class="glyph">🗓️</span></div>
+          <div class="body">
+            <div class="title">The reservation lifecycle</div>
+            <p class="desc">Reserving capacity end to end: <strong>warre</strong> books the slot, <strong>blazar</strong> fences the hosts with a private flavor, an aggregate and a <code style="font-family:var(--mono);font-size:.9em">CUSTOM_RESERVATION_*</code> resource class, and nova/placement enforce it. DevOps-focused — an <em>ops check</em> panel with the exact CLI at every step, plus a troubleshooting playbook.</p>
+            <div class="meta"><span>~22 min</span><span>warre · blazar · nova</span><span>ops checks</span><span>troubleshooting</span></div>
+            <div class="file">06-warre-reservation-lifecycle.html <span class="arrow">→</span></div>
+          </div>
+        </a>
+
+      </div>
+    </section>
+
+    <footer>
+      Traced from the OpenStack Nova source on branch <code>nectar/2024.1</code>
+      (course 06 also from warre <code>master</code> and blazar <code>2025.1</code>).
+      Code snippets are exact excerpts. Built in the codebase-to-course visual style;
+      this index is styled after Thariq Shihipar's <em>The unreasonable effectiveness of HTML</em>.
+    </footer>
+
+  </div>
+</body>
+</html>

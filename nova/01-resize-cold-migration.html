@@ -1,0 +1,1416 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Resize &amp; Cold Migration in Nova — The Message Flow</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400;1,9..40,500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <style>
+  /* ── DESIGN TOKENS ─────────────────────────────────────────── */
+  :root {
+    --color-bg:             #FAF7F2;
+    --color-bg-warm:        #F5F0E8;
+    --color-bg-code:        #1E1E2E;
+    --color-text:           #2C2A28;
+    --color-text-secondary: #6B6560;
+    --color-text-muted:     #9E9790;
+    --color-border:         #E5DFD6;
+    --color-border-light:   #EEEBE5;
+    --color-surface:        #FFFFFF;
+    --color-surface-warm:   #FDF9F3;
+
+    /* ACCENT — teal, fitting for OpenStack infrastructure */
+    --color-accent:         #2A7B9B;
+    --color-accent-hover:   #1F6280;
+    --color-accent-light:   #E4F2F7;
+    --color-accent-muted:   #5A9DB8;
+
+    --color-success:        #2D8B55;
+    --color-success-light:  #E8F5EE;
+    --color-error:          #C93B3B;
+    --color-error-light:    #FDE8E8;
+    --color-info:           #2A7B9B;
+    --color-info-light:     #E4F2F7;
+
+    --color-actor-1:        #D94F30;
+    --color-actor-2:        #2A7B9B;
+    --color-actor-3:        #7B6DAA;
+    --color-actor-4:        #D4A843;
+    --color-actor-5:        #2D8B55;
+
+    --font-display: 'Bricolage Grotesque', Georgia, serif;
+    --font-body:    'DM Sans', -apple-system, sans-serif;
+    --font-mono:    'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+
+    --text-xs:   0.75rem;
+    --text-sm:   0.875rem;
+    --text-base: 1rem;
+    --text-lg:   1.125rem;
+    --text-xl:   1.25rem;
+    --text-2xl:  1.5rem;
+    --text-3xl:  1.875rem;
+    --text-4xl:  2.25rem;
+    --text-5xl:  3rem;
+    --text-6xl:  3.75rem;
+
+    --leading-tight:  1.15;
+    --leading-snug:   1.3;
+    --leading-normal: 1.6;
+    --leading-loose:  1.8;
+
+    --space-1:  0.25rem; --space-2:  0.5rem; --space-3:  0.75rem;
+    --space-4:  1rem;    --space-5:  1.25rem; --space-6:  1.5rem;
+    --space-8:  2rem;    --space-10: 2.5rem;  --space-12: 3rem;
+    --space-16: 4rem;    --space-20: 5rem;    --space-24: 6rem;
+
+    --content-width:      800px;
+    --content-width-wide: 1000px;
+    --nav-height:         50px;
+
+    --radius-sm:   8px;  --radius-md:   12px;
+    --radius-lg:   16px; --radius-full: 9999px;
+
+    --shadow-sm: 0 1px 2px rgba(44,42,40,0.05);
+    --shadow-md: 0 4px 12px rgba(44,42,40,0.08);
+    --shadow-lg: 0 8px 24px rgba(44,42,40,0.10);
+    --shadow-xl: 0 16px 48px rgba(44,42,40,0.12);
+
+    --ease-out:    cubic-bezier(0.16,1,0.3,1);
+    --ease-in-out: cubic-bezier(0.65,0,0.35,1);
+    --duration-fast:   150ms;
+    --duration-normal: 300ms;
+    --duration-slow:   500ms;
+    --stagger-delay:   120ms;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-snap-type: y proximity; scroll-behavior: smooth; }
+  body {
+    font-family: var(--font-body);
+    font-size: var(--text-base);
+    color: var(--color-text);
+    line-height: var(--leading-normal);
+    background: var(--color-bg);
+    background-image: radial-gradient(ellipse at 20% 50%, rgba(42,123,155,0.04) 0%, transparent 50%);
+  }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: var(--radius-full); }
+
+  pre, code { white-space: pre-wrap; word-break: break-word; overflow-x: hidden; }
+  .translation-code::-webkit-scrollbar, pre::-webkit-scrollbar { display: none; }
+
+  .code-keyword  { color: #CBA6F7; }
+  .code-string   { color: #A6E3A1; }
+  .code-function { color: #89B4FA; }
+  .code-comment  { color: #6C7086; }
+  .code-number   { color: #FAB387; }
+  .code-property { color: #F9E2AF; }
+  .code-operator { color: #94E2D5; }
+  .code-class    { color: #F9E2AF; }
+  .code-line     { display: block; }
+
+  /* ── NAV ── */
+  .nav {
+    position: fixed; top: 0; left: 0; right: 0;
+    height: var(--nav-height); z-index: 1000;
+    background: rgba(250,247,242,0.92); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--color-border-light);
+  }
+  .progress-bar { position: absolute; bottom: 0; left: 0; height: 2px; width: 0%; background: var(--color-accent); transition: width 100ms linear; }
+  .nav-inner { max-width: var(--content-width-wide); margin: 0 auto; padding: 0 var(--space-6); height: 100%; display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
+  .nav-title { font-family: var(--font-display); font-size: var(--text-sm); font-weight: 600; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; }
+  .nav-dots { display: flex; align-items: center; gap: var(--space-2); }
+  .nav-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--color-text-muted); background: transparent; cursor: pointer; transition: all var(--duration-fast); position: relative; }
+  .nav-dot::after { content: attr(data-tooltip); position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: var(--color-bg-code); color: #CDD6F4; font-family: var(--font-body); font-size: var(--text-xs); white-space: nowrap; padding: var(--space-1) var(--space-3); border-radius: var(--radius-sm); pointer-events: none; opacity: 0; transition: opacity var(--duration-fast); }
+  .nav-dot:hover::after { opacity: 1; }
+  .nav-dot.active { border-color: var(--color-accent); background: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-light); }
+  .nav-dot.visited { border-color: var(--color-accent-muted); background: var(--color-accent-muted); }
+
+  /* ── MODULE ── */
+  .module { min-height: 100dvh; min-height: 100vh; scroll-snap-align: start; padding: var(--space-16) var(--space-6); padding-top: calc(var(--nav-height) + var(--space-12)); }
+  .module-content { max-width: var(--content-width); margin: 0 auto; }
+  .module-header { margin-bottom: var(--space-12); }
+  .module-number { display: block; font-family: var(--font-display); font-size: var(--text-6xl); font-weight: 800; color: var(--color-accent); opacity: 0.15; line-height: 1; margin-bottom: var(--space-2); }
+  .module-title { font-family: var(--font-display); font-size: var(--text-4xl); font-weight: 700; line-height: var(--leading-tight); color: var(--color-text); }
+  .module-subtitle { margin-top: var(--space-3); font-size: var(--text-lg); color: var(--color-text-secondary); line-height: var(--leading-snug); }
+  .screen { margin-bottom: var(--space-16); }
+  .screen-heading { font-family: var(--font-display); font-size: var(--text-2xl); font-weight: 600; color: var(--color-text); margin-bottom: var(--space-6); line-height: var(--leading-snug); }
+  p { margin-bottom: var(--space-4); }
+  p:last-child { margin-bottom: 0; }
+  .lead { font-size: var(--text-lg); }
+
+  /* ── ANIMATIONS ── */
+  .animate-in { opacity: 0; transform: translateY(20px); transition: opacity var(--duration-slow) var(--ease-out), transform var(--duration-slow) var(--ease-out); }
+  .animate-in.visible { opacity: 1; transform: translateY(0); }
+  .stagger-children > .animate-in { transition-delay: calc(var(--stagger-index, 0) * var(--stagger-delay)); }
+
+  /* ── HERO ── */
+  .hero { min-height: 100vh; display: flex; flex-direction: column; justify-content: center; padding: var(--space-16) var(--space-6); max-width: var(--content-width); margin: 0 auto; }
+  .hero-eyebrow { font-family: var(--font-mono); font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.15em; color: var(--color-accent); margin-bottom: var(--space-4); }
+  .hero-title { font-family: var(--font-display); font-size: var(--text-6xl); font-weight: 800; line-height: 1.05; margin-bottom: var(--space-6); }
+  .hero-sub { font-size: var(--text-xl); color: var(--color-text-secondary); max-width: 640px; margin-bottom: var(--space-8); }
+  .hero-meta { display: flex; gap: var(--space-6); flex-wrap: wrap; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-text-muted); }
+  .hero-meta span { display: flex; align-items: center; gap: var(--space-2); }
+
+  /* ── TRANSLATION ── */
+  .translation-block { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-radius: var(--radius-md); overflow: hidden; box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .translation-code { background: var(--color-bg-code); color: #CDD6F4; padding: var(--space-6); font-family: var(--font-mono); font-size: var(--text-sm); line-height: 1.7; position: relative; overflow-x: hidden; }
+  .translation-english { background: var(--color-surface-warm); padding: var(--space-6); font-size: var(--text-sm); line-height: 1.7; border-left: 3px solid var(--color-accent); }
+  .translation-label { position: absolute; top: var(--space-2); right: var(--space-3); font-family: var(--font-mono); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.5; }
+  .translation-english .translation-label { position: static; display: block; margin-bottom: var(--space-3); color: var(--color-text-muted); }
+  .translation-english strong { color: var(--color-text); }
+  .file-ref { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-accent); background: var(--color-accent-light); padding: 1px 6px; border-radius: 4px; }
+
+  /* ── FLOW ANIMATION ── */
+  .flow-animation { position: relative; background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-8); box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .flow-actors { display: flex; justify-content: center; align-items: center; gap: var(--space-4); margin-bottom: var(--space-8); flex-wrap: wrap; }
+  .flow-actor { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); transition: all var(--duration-normal) var(--ease-out); }
+  .flow-actor-icon { width: 54px; height: 54px; border-radius: var(--radius-md); background: var(--color-bg-warm); border: 2px solid var(--color-border); display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-size: var(--text-base); font-weight: 700; transition: all var(--duration-normal) var(--ease-out); color: var(--color-text-secondary); }
+  .flow-actor span { font-size: var(--text-xs); color: var(--color-text-secondary); font-family: var(--font-mono); text-align: center; }
+  .flow-actor.active .flow-actor-icon { border-color: var(--color-accent); background: var(--color-accent-light); box-shadow: 0 0 0 3px var(--color-accent-light), 0 0 20px rgba(42,123,155,0.18); transform: scale(1.12); color: var(--color-accent-hover); }
+  .flow-packet { width: 16px; height: 16px; border-radius: 50%; background: var(--color-accent); position: absolute; pointer-events: none; display: none; box-shadow: 0 0 8px rgba(42,123,155,0.6); z-index: 5; }
+  .flow-step-label { text-align: center; font-size: var(--text-sm); color: var(--color-text); min-height: 3em; padding: var(--space-3) var(--space-4); background: var(--color-bg-warm); border-radius: var(--radius-sm); margin-bottom: var(--space-6); line-height: var(--leading-normal); }
+  .flow-controls { display: flex; align-items: center; gap: var(--space-3); }
+  .flow-progress { margin-left: auto; font-size: var(--text-xs); color: var(--color-text-muted); font-family: var(--font-mono); }
+
+  /* ── ARCH DIAGRAM ── */
+  .arch-diagram { background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-8); box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .arch-zone { border: 1px dashed var(--color-border); border-radius: var(--radius-md); padding: var(--space-6); margin-bottom: var(--space-4); }
+  .arch-zone-label { font-family: var(--font-mono); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-muted); margin-bottom: var(--space-4); }
+  .arch-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+  .arch-component { display: inline-flex; flex-direction: column; align-items: center; gap: var(--space-2); padding: var(--space-4); background: var(--color-surface-warm); border: 1px solid var(--color-border); border-radius: var(--radius-md); cursor: pointer; margin: var(--space-2); transition: all var(--duration-fast); font-size: var(--text-sm); min-width: 120px; }
+  .arch-component:hover, .arch-component.active { border-color: var(--color-accent); background: var(--color-accent-light); transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+  .arch-component strong { font-family: var(--font-display); }
+  .arch-component small { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+  .arch-description { margin-top: var(--space-4); padding: var(--space-4); background: var(--color-bg-warm); border-radius: var(--radius-sm); font-size: var(--text-sm); color: var(--color-text-secondary); min-height: 2.5em; }
+
+  /* ── CALLOUT ── */
+  .callout { display: flex; gap: var(--space-4); padding: var(--space-5); border-radius: var(--radius-md); margin: var(--space-6) 0; border-left: 4px solid; }
+  .callout-accent  { background: var(--color-accent-light);  border-color: var(--color-accent); }
+  .callout-info    { background: var(--color-info-light);    border-color: var(--color-info); }
+  .callout-warning { background: var(--color-error-light);   border-color: var(--color-error); }
+  .callout-success { background: var(--color-success-light); border-color: var(--color-success); }
+  .callout-icon { font-size: 1.25rem; flex-shrink: 0; margin-top: 2px; }
+  .callout-title { display: block; font-weight: 700; margin-bottom: var(--space-1); }
+  .callout-content p { font-size: var(--text-sm); margin: 0; color: var(--color-text-secondary); }
+
+  /* ── STEP CARDS ── */
+  .step-cards { display: flex; flex-direction: column; gap: var(--space-3); margin: var(--space-6) 0; }
+  .step-card { display: flex; align-items: flex-start; gap: var(--space-4); padding: var(--space-4) var(--space-5); background: var(--color-surface); border-radius: var(--radius-md); border-left: 3px solid var(--color-accent); box-shadow: var(--shadow-sm); }
+  .step-num { width: 32px; height: 32px; border-radius: 50%; background: var(--color-accent); color: white; font-weight: 700; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); flex-shrink: 0; }
+  .step-body strong { display: block; font-weight: 600; margin-bottom: var(--space-1); }
+  .step-body p { margin: 0; color: var(--color-text-secondary); font-size: var(--text-sm); }
+  .step-body .src { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+
+  /* ── PATTERN CARDS ── */
+  .pattern-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-4); margin: var(--space-6) 0; }
+  .pattern-card { background: var(--color-surface); border-radius: var(--radius-md); padding: var(--space-6); box-shadow: var(--shadow-sm); border-top: 3px solid var(--color-accent); transition: transform var(--duration-normal) var(--ease-out), box-shadow var(--duration-normal); }
+  .pattern-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-md); }
+  .pattern-icon { font-size: 1.5rem; margin-bottom: var(--space-3); }
+  .pattern-title { font-family: var(--font-display); font-size: var(--text-base); font-weight: 700; margin-bottom: var(--space-2); }
+  .pattern-desc { font-size: var(--text-sm); color: var(--color-text-secondary); line-height: var(--leading-normal); margin: 0; }
+
+  /* ── STATE TIMELINE ── */
+  .state-track { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: var(--space-6) 0; }
+  .state-pill { font-family: var(--font-mono); font-size: var(--text-xs); padding: var(--space-2) var(--space-3); border-radius: var(--radius-full); background: var(--color-surface); border: 1px solid var(--color-border); }
+  .state-pill.vm { background: var(--color-accent-light); border-color: var(--color-accent-muted); color: var(--color-accent-hover); font-weight: 600; }
+  .state-pill.task { background: var(--color-surface-warm); color: var(--color-text-secondary); }
+  .state-pill.done { background: var(--color-success-light); border-color: var(--color-success); color: var(--color-success); font-weight: 600; }
+  .state-arrow { color: var(--color-text-muted); }
+
+  /* ── OPS CHECK (terminal verification panel) ── */
+  .ops-check { background: var(--color-bg-code); border-radius: var(--radius-md); margin: var(--space-6) 0; box-shadow: var(--shadow-md); overflow: hidden; }
+  .ops-check-head { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-5); background: rgba(255,255,255,0.05); border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .ops-check-badge { font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #1E1E2E; background: #A6E3A1; padding: 2px 8px; border-radius: 4px; flex-shrink: 0; }
+  .ops-check-title { font-size: var(--text-sm); color: #CDD6F4; font-family: var(--font-body); }
+  .ops-check-body { padding: var(--space-5); font-family: var(--font-mono); font-size: var(--text-sm); line-height: 1.75; color: #CDD6F4; }
+  .ops-check-body .prompt { color: #6C7086; user-select: none; }
+  .ops-check-body .cmd { color: #A6E3A1; }
+  .ops-check-body .out { color: #9399B2; }
+  .ops-check-body .hl { color: #F9E2AF; }
+  .ops-check-body .note { color: #89B4FA; font-style: italic; }
+
+  /* ── QUIZ ── */
+  .quiz-container { background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-8); box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .quiz-question-block { margin-bottom: var(--space-8); }
+  .quiz-question-block:last-of-type { margin-bottom: 0; }
+  .quiz-question { font-family: var(--font-display); font-size: var(--text-lg); font-weight: 600; margin-bottom: var(--space-4); line-height: var(--leading-snug); }
+  .quiz-options { display: flex; flex-direction: column; gap: var(--space-2); }
+  .quiz-option { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: 2px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); cursor: pointer; width: 100%; text-align: left; font-family: var(--font-body); font-size: var(--text-base); transition: border-color var(--duration-fast), background var(--duration-fast); }
+  .quiz-option:hover:not(:disabled) { border-color: var(--color-accent-muted); }
+  .quiz-option.selected { border-color: var(--color-accent); background: var(--color-accent-light); }
+  .quiz-option.correct  { border-color: var(--color-success); background: var(--color-success-light); }
+  .quiz-option.incorrect{ border-color: var(--color-error);   background: var(--color-error-light); }
+  .quiz-option:disabled { cursor: default; }
+  .quiz-option-radio { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--color-border); flex-shrink: 0; transition: all var(--duration-fast); }
+  .quiz-option.selected .quiz-option-radio { border-color: var(--color-accent); background: var(--color-accent); box-shadow: inset 0 0 0 3px white; }
+  .quiz-option.correct .quiz-option-radio  { border-color: var(--color-success); background: var(--color-success); box-shadow: inset 0 0 0 3px white; }
+  .quiz-option.incorrect .quiz-option-radio{ border-color: var(--color-error);   background: var(--color-error);   box-shadow: inset 0 0 0 3px white; }
+  .quiz-feedback { max-height: 0; overflow: hidden; opacity: 0; transition: max-height var(--duration-normal), opacity var(--duration-normal); font-size: var(--text-sm); border-radius: var(--radius-sm); }
+  .quiz-feedback.show { max-height: 240px; opacity: 1; padding: var(--space-3); margin-top: var(--space-2); }
+  .quiz-feedback.success { background: var(--color-success-light); color: var(--color-success); }
+  .quiz-feedback.error   { background: var(--color-error-light);   color: var(--color-error); }
+  .quiz-feedback.warning { background: var(--color-info-light);    color: var(--color-info); }
+  .quiz-check-btn, .quiz-reset-btn { margin-top: var(--space-6); padding: var(--space-3) var(--space-6); border-radius: var(--radius-sm); font-family: var(--font-body); font-size: var(--text-sm); font-weight: 600; cursor: pointer; border: none; transition: background var(--duration-fast), transform var(--duration-fast); }
+  .quiz-check-btn { background: var(--color-accent); color: white; margin-right: var(--space-3); }
+  .quiz-check-btn:hover { background: var(--color-accent-hover); transform: translateY(-1px); }
+  .quiz-reset-btn { background: var(--color-surface); color: var(--color-text-secondary); border: 1px solid var(--color-border); }
+  .quiz-reset-btn:hover { border-color: var(--color-accent-muted); }
+
+  /* ── DND ── */
+  .dnd-container { margin: var(--space-8) 0; }
+  .dnd-chips { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-bottom: var(--space-6); }
+  .dnd-chip { padding: var(--space-2) var(--space-4); background: var(--color-accent); color: white; border-radius: var(--radius-full); font-size: var(--text-sm); font-weight: 600; cursor: grab; user-select: none; transition: opacity var(--duration-fast), transform var(--duration-fast); }
+  .dnd-chip:active { cursor: grabbing; transform: scale(1.05); }
+  .dnd-chip.dragging { opacity: 0.4; }
+  .dnd-chip.placed { opacity: 0.3; pointer-events: none; }
+  .dnd-zones { display: flex; flex-direction: column; gap: var(--space-4); }
+  .dnd-zone { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); background: var(--color-surface); }
+  .dnd-zone-label { font-size: var(--text-sm); color: var(--color-text-secondary); margin-bottom: var(--space-3); }
+  .dnd-zone-target { min-height: 40px; border: 2px dashed var(--color-border); border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; font-size: var(--text-sm); color: var(--color-text-muted); transition: border-color var(--duration-fast), background var(--duration-fast); }
+  .dnd-zone-target.drag-over { border-color: var(--color-accent); background: var(--color-accent-light); }
+  .dnd-zone-target.correct-placed { border-color: var(--color-success); background: var(--color-success-light); color: var(--color-success); font-weight: 600; }
+  .dnd-zone-target.incorrect-placed{ border-color: var(--color-error); background: var(--color-error-light); }
+  .btn { padding: var(--space-2) var(--space-5); border-radius: var(--radius-sm); border: 1px solid var(--color-border); background: var(--color-surface); font-family: var(--font-body); font-size: var(--text-sm); font-weight: 600; cursor: pointer; transition: all var(--duration-fast); color: var(--color-text-secondary); }
+  .btn:hover { border-color: var(--color-accent-muted); color: var(--color-accent); }
+  .btn-primary { background: var(--color-accent); color: white; border-color: var(--color-accent); }
+  .btn-primary:hover { background: var(--color-accent-hover); border-color: var(--color-accent-hover); color: white; }
+
+  /* ── GLOSSARY ── */
+  .term { border-bottom: 1.5px dashed var(--color-accent-muted); cursor: pointer; }
+  .term:hover, .term.active { border-bottom-color: var(--color-accent); color: var(--color-accent); }
+  .term-tooltip { position: fixed; background: var(--color-bg-code); color: #CDD6F4; padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); font-size: var(--text-sm); font-family: var(--font-body); line-height: var(--leading-normal); width: max(200px, min(320px, 80vw)); box-shadow: var(--shadow-lg); pointer-events: none; opacity: 0; transition: opacity var(--duration-fast); z-index: 10000; }
+  .term-tooltip::after { content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 6px solid transparent; border-top-color: var(--color-bg-code); }
+  .term-tooltip.visible { opacity: 1; }
+  .term-tooltip.flip::after { top: auto; bottom: 100%; border-top-color: transparent; border-bottom-color: var(--color-bg-code); }
+
+  .footer { text-align: center; padding: var(--space-16) var(--space-6); color: var(--color-text-muted); font-size: var(--text-sm); border-top: 1px solid var(--color-border-light); }
+
+  @media (max-width: 768px) {
+    :root { --text-4xl: 1.875rem; --text-5xl: 2.25rem; --text-6xl: 3rem; }
+    .translation-block { grid-template-columns: 1fr; }
+    .translation-english { border-left: none; border-top: 3px solid var(--color-accent); }
+    .pattern-cards { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 480px) {
+    :root { --text-4xl: 1.5rem; --text-5xl: 1.875rem; --text-6xl: 2.25rem; }
+    .module { padding: var(--space-8) var(--space-4); }
+    .pattern-cards { grid-template-columns: 1fr; }
+    .nav-title { max-width: 150px; }
+  }
+
+  @keyframes packetMove {
+    from { left: var(--packet-from-x); top: var(--packet-from-y); opacity: 0; }
+    20%  { opacity: 1; }
+    80%  { opacity: 1; }
+    to   { left: var(--packet-to-x); top: var(--packet-to-y); opacity: 0; }
+  }
+  </style>
+</head>
+<body>
+
+  <nav class="nav" id="nav">
+    <div class="progress-bar" id="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+    <div class="nav-inner">
+      <span class="nav-title">Resize &amp; Cold Migration</span>
+      <div class="nav-dots" id="nav-dots" role="tablist">
+        <button class="nav-dot" data-target="hero" data-tooltip="Start" role="tab" aria-label="Start"></button>
+        <button class="nav-dot" data-target="module-0" data-tooltip="The Cast of Characters" role="tab" aria-label="Module 0"></button>
+        <button class="nav-dot" data-target="module-1" data-tooltip="API Validates &amp; Casts" role="tab" aria-label="Module 1"></button>
+        <button class="nav-dot" data-target="module-2" data-tooltip="Conductor Schedules" role="tab" aria-label="Module 2"></button>
+        <button class="nav-dot" data-target="module-3" data-tooltip="Move the Disk" role="tab" aria-label="Module 3"></button>
+        <button class="nav-dot" data-target="module-4" data-tooltip="Finish on Destination" role="tab" aria-label="Module 4"></button>
+        <button class="nav-dot" data-target="module-5" data-tooltip="Confirm or Revert" role="tab" aria-label="Module 5"></button>
+        <button class="nav-dot" data-target="module-6" data-tooltip="The Full Journey" role="tab" aria-label="Module 6"></button>
+        <button class="nav-dot" data-target="module-7" data-tooltip="When It Goes Wrong" role="tab" aria-label="Module 7"></button>
+        <button class="nav-dot" data-target="module-8" data-tooltip="Check Yourself" role="tab" aria-label="Module 8"></button>
+      </div>
+    </div>
+  </nav>
+
+  <main id="main">
+
+  <!-- ════════════ HERO ════════════ -->
+  <section class="module" id="hero" style="background: var(--color-bg);">
+    <div class="hero">
+      <div class="hero-eyebrow animate-in">OpenStack Nova · Message Flow Walkthrough</div>
+      <h1 class="hero-title animate-in">What happens when<br>you resize a server?</h1>
+      <p class="hero-sub animate-in">You ask for a bigger flavor, or just a different host. Nova powers the server off, moves its disk and resource claim to a scheduler-selected destination compute, and parks it in VERIFY_RESIZE so you can confirm or undo the move. Throughout, Placement holds the old reservation under a migration UUID. This is the complete journey, traced from the real Nova source.</p>
+      <div class="hero-meta animate-in">
+        <span>⏱️ ~14 min read</span>
+        <span>🧩 7 services</span>
+        <span>🔀 RPC + REST</span>
+        <span>↩️ Confirm or revert</span>
+        <span>🔎 an ops check at every step</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 0 — CAST ════════════ -->
+  <section class="module" id="module-0" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">00</span>
+        <h1 class="module-title">The cast of characters</h1>
+        <p class="module-subtitle">A resize is a relay race between two compute hosts, refereed by the conductor and scheduler. Before we trace the messages, meet the players and the two ways they talk.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Two ways to send a message</h2>
+          <p>Every interaction in this story travels over one of two channels. Knowing which is which is the single most useful idea in the whole walkthrough.</p>
+          <div class="pattern-cards stagger-children">
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">📮</div>
+              <div class="pattern-title">RPC over the message queue</div>
+              <p class="pattern-desc">Nova's own services (API, conductor, scheduler, the two computes) talk through a message broker like RabbitMQ. A <span class="term" data-definition="A 'cast' is fire-and-forget: the sender drops the message on the queue and moves on without waiting for a reply.">cast</span> is fire-and-forget; a <span class="term" data-definition="A 'call' is a blocking RPC: the sender waits until the receiver finishes and returns a result.">call</span> waits for an answer.</p>
+            </div>
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">🌐</div>
+              <div class="pattern-title">REST over HTTP</div>
+              <p class="pattern-desc">When Nova needs another OpenStack project — Placement, Neutron, Cinder, Glance — it makes an ordinary HTTP REST request, just like a web app calling an API.</p>
+            </div>
+          </div>
+          <div class="callout callout-accent">
+            <div class="callout-icon">💡</div>
+            <div class="callout-content">
+              <span class="callout-title">The rule of thumb</span>
+              <p>If both ends are <em>Nova</em> services, it's RPC on the queue. If the other end is a <em>different</em> OpenStack project, it's REST over HTTP. A resize bounces between the two computes entirely over RPC casts.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Meet the services (click each one)</h2>
+          <p>These are the components your resize request will pass through. Notice there are <em>two</em> compute hosts: the one the server is leaving and the one it is arriving on. Click any box to learn its job.</p>
+          <div class="arch-diagram">
+            <div class="arch-zone">
+              <div class="arch-zone-label">Nova services — they speak RPC to each other</div>
+              <div class="arch-row">
+                <div class="arch-component active" data-desc="The front door. Validates the requested flavor, checks quota only for upsizes, stashes the new flavor on the RequestSpec, sets task_state RESIZE_PREP, then casts asynchronously to conductor. Cold migration is the same resize() call with flavor_id=None.">
+                  <strong>nova-api</strong><small>the front door</small>
+                </div>
+                <div class="arch-component" data-desc="The orchestrator. migrate_server() routes a cold move to _cold_migrate(), which runs a MigrationTask: it creates the Migration record, moves the source allocation to the migration UUID in Placement, calls the scheduler, and casts prep_resize to the destination compute.">
+                  <strong>nova-conductor</strong><small>the orchestrator</small>
+                </div>
+                <div class="arch-component" data-desc="The matchmaker. select_destinations picks a destination host plus alternates and, as a side effect, claims the new-flavor resources in Placement for the instance consumer on the chosen node.">
+                  <strong>nova-scheduler</strong><small>the matchmaker</small>
+                </div>
+                <div class="arch-component" data-desc="The host the server is leaving. resize_instance powers off the guest, copies the disk to the destination, retargets ports and volumes, and updates instance.host to the dest. Later it either tears itself down (confirm) or rebuilds the original guest (revert).">
+                  <strong>nova-compute (source)</strong><small>the old host</small>
+                </div>
+                <div class="arch-component" data-desc="The host the server is arriving on. prep_resize claims local NUMA/PCI resources via the resource tracker; finish_resize sets up disk, network and volumes and spawns the guest at its new size, ending in vm_state RESIZED.">
+                  <strong>nova-compute (dest)</strong><small>the new host</small>
+                </div>
+              </div>
+            </div>
+            <div class="arch-zone">
+              <div class="arch-zone-label">Other OpenStack projects — Nova calls them over REST</div>
+              <div class="arch-row">
+                <div class="arch-component" data-desc="The resource accountant. Holds the source allocation under the migration UUID while the move is in progress; receives the destination allocation under the instance UUID from the scheduler. Confirm deletes the migration-held allocation; revert moves it back.">
+                  <strong>Placement</strong><small>resource accounting</small>
+                </div>
+                <div class="arch-component" data-desc="Networking. migrate_instance_start activates pre-created destination port bindings on the source side; migrate_instance_finish updates each port's binding:host_id to the destination on the dest side.">
+                  <strong>Neutron</strong><small>networking</small>
+                </div>
+                <div class="arch-component" data-desc="Block storage. For the new attachment flow, the source deletes its attachment and creates an empty one; the destination updates it with its host connector and completes it — a connector swap that follows the disk to the new host.">
+                  <strong>Cinder</strong><small>volumes</small>
+                </div>
+                <div class="arch-component" data-desc="The hypervisor driver. migrate_disk_and_power_off powers off and copies disk images to the dest; finish_migration recreates the guest at the destination; confirm_migration cleans up the source; finish_revert_migration restores the source guest.">
+                  <strong>libvirt</strong><small>hypervisor</small>
+                </div>
+              </div>
+            </div>
+            <div class="arch-description">nova-api — the front door. Validates the requested flavor, checks quota only for upsizes, stashes the new flavor on the RequestSpec, sets task_state RESIZE_PREP, then casts asynchronously to conductor.</div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The journey in one breath</h2>
+          <p>Here is the whole thing compressed into a few beats. The rest of the course unpacks each one.</p>
+          <div class="step-cards stagger-children">
+            <div class="step-card animate-in"><div class="step-num">1</div><div class="step-body"><strong>API validates and casts</strong><p>nova-api checks the flavor, guards quota for upsizes only, updates the RequestSpec, sets RESIZE_PREP, and casts to the conductor.</p></div></div>
+            <div class="step-card animate-in"><div class="step-num">2</div><div class="step-body"><strong>Conductor schedules and swaps the allocation</strong><p>It creates the Migration record, moves the source allocation to the migration UUID, asks the scheduler for a destination, and casts prep_resize there.</p></div></div>
+            <div class="step-card animate-in"><div class="step-num">3</div><div class="step-body"><strong>Destination claims, source moves the disk</strong><p>The destination claims resources and casts back to the source, which powers off the guest and copies its disk over.</p></div></div>
+            <div class="step-card animate-in"><div class="step-num">4</div><div class="step-body"><strong>Destination finishes → RESIZED</strong><p>The destination retargets networking and volumes, recreates the guest at its new size, and lands in vm_state RESIZED (VERIFY_RESIZE).</p></div></div>
+            <div class="step-card animate-in"><div class="step-num">5</div><div class="step-body"><strong>You confirm or revert</strong><p>Confirm deletes the old copy and drops the source allocation. Revert destroys the new copy and restores the original.</p></div></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 1 — API PHASE ════════════ -->
+  <section class="module" id="module-1" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">01</span>
+        <h1 class="module-title">API validates and casts</h1>
+        <p class="module-subtitle">Your request lands in <span class="file-ref">nova/compute/api.py</span> <code>resize()</code>. Nothing moves yet — this phase validates the flavor, guards quota, records intent as <code>RESIZE_PREP</code>, and hands off.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Migration is just resize with the same flavor</h2>
+          <p>If no <code>flavor_id</code> is supplied, Nova assumes a migration and keeps the original flavor. Everything downstream is shared code — a cold migration is a resize that happens not to change size.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/api.py</span><br>
+<span class="code-comment"># If flavor_id is not provided, only migrate the instance.</span><br>
+volume_backed = <span class="code-keyword">None</span><br>
+<span class="code-keyword">if</span> <span class="code-keyword">not</span> flavor_id:<br>
+&nbsp;&nbsp;LOG.<span class="code-function">debug</span>(<span class="code-string">"flavor_id is None. Assuming migration."</span>,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instance=instance)<br>
+&nbsp;&nbsp;new_flavor = current_flavor<br>
+<span class="code-keyword">else</span>:<br>
+&nbsp;&nbsp;new_flavor = flavors.<span class="code-function">get_flavor_by_flavor_id</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;flavor_id, read_deleted=<span class="code-string">"no"</span>)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>No new flavor means "move this server somewhere else but keep its size."</strong> A <span class="term" data-definition="A cold migration moves a powered-off server to a different compute host without changing its flavor. In Nova it runs the exact same code path as a resize, just with flavor_id unset.">cold migration</span> and a resize are the same workflow; only the flavor differs.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Quota is only checked for upsizes</h2>
+          <p>Resizing up may exceed quota, so Nova checks headroom. Resizing down, or a pure migration, does not need a quota check here.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/api.py</span><br>
+<span class="code-keyword">if</span> flavor_id:<br>
+&nbsp;&nbsp;...<br>
+&nbsp;&nbsp;<span class="code-keyword">self</span>.<span class="code-function">_check_quota_for_upsize</span>(context, instance,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;current_flavor,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;new_flavor, volume_backed,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;is_revert=<span class="code-keyword">False</span>)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>Only growing the server triggers a quota guard.</strong> The check is gated by <code>if flavor_id:</code> — a downsize or a flavor-less migration skips it entirely, because they cannot put you over your limit.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Stamp RESIZE_PREP and cast to conductor</h2>
+          <p>Nova saves the task_state transition, records the action (RESIZE vs MIGRATE), then casts to the conductor with <code>do_cast=True</code> so it does not block on scheduling. The HTTP request returns immediately.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/api.py</span><br>
+instance.task_state = task_states.RESIZE_PREP<br>
+instance.progress = <span class="code-number">0</span><br>
+instance.auto_disk_config = auto_disk_config <span class="code-keyword">or</span> <span class="code-keyword">False</span><br>
+instance.<span class="code-function">save</span>(expected_task_state=[<span class="code-keyword">None</span>])<br>
+...<br>
+<span class="code-keyword">self</span>.compute_task_api.<span class="code-function">resize_instance</span>(<br>&nbsp;&nbsp;context, instance,<br>&nbsp;&nbsp;scheduler_hint=scheduler_hint,<br>&nbsp;&nbsp;flavor=new_flavor,<br>&nbsp;&nbsp;...<br>&nbsp;&nbsp;do_cast=<span class="code-keyword">True</span>)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>Mark the server "preparing to resize" and hand off to the conductor without waiting.</strong> <code>expected_task_state=[None]</code> is an optimistic guard: the save only succeeds if nothing else has already grabbed the instance. The <code>do_cast=True</code> means fire-and-forget, so your CLI returns at once.
+            </div>
+          </div>
+          <div class="callout callout-accent">
+            <div class="callout-icon">⚡</div>
+            <div class="callout-content">
+              <span class="callout-title">This is why the resize command returns instantly</span>
+              <p>The API accepts the request and walks away. Everything from here happens asynchronously while you poll the server status, waiting for it to reach <code>VERIFY_RESIZE</code>.</p>
+            </div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">Right after the resize returns — intent stamped, no migration record yet</span></div>
+            <div class="ops-check-body">
+              <span class="prompt">$ </span><span class="cmd">openstack server show $UUID -c status -c OS-EXT-STS:task_state -c OS-EXT-SRV-ATTR:host</span><br>
+              <span class="out">| <span class="hl">RESIZE</span> | <span class="hl">resize_prep</span> | qh2-rcc001 (still the source) |</span><br>
+              <br>
+              <span class="note"># the migration ledger row is born in the CONDUCTOR — if it exists, the cast arrived</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack server migration list --server $UUID</span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT id, status FROM nova.migrations WHERE instance_uuid='$UUID' ORDER BY id DESC LIMIT 1;</span>  <span class="out">(cell DB)</span><br>
+              <br>
+              <span class="note"># stuck at resize_prep with NO migration row → the cast to nova-conductor was lost;</span><br>
+              <span class="note"># check the conductor service and the 'conductor' queue before anything else</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 2 — CONDUCTOR / SCHEDULE ════════════ -->
+  <section class="module" id="module-2" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">02</span>
+        <h1 class="module-title">Conductor schedules and swaps the allocation</h1>
+        <p class="module-subtitle">The conductor picks up the cast, routes it to <code>_cold_migrate()</code>, and runs a <span class="term" data-definition="A conductor task object that orchestrates a cold move: it creates the Migration record, swaps the source allocation, calls the scheduler, and casts prep_resize. Defined in nova/conductor/tasks/migrate.py.">MigrationTask</span> that does the clever bookkeeping in Placement.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">migrate_server routes cold migrate vs live migrate</h2>
+          <p>A request that is not live, not a rebuild, and has a flavor is a cold migration or resize. The conductor decides this and starts the cold-migrate workflow.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">conductor/manager.py</span><br>
+<span class="code-keyword">elif</span> <span class="code-keyword">not</span> live <span class="code-keyword">and</span> <span class="code-keyword">not</span> rebuild <span class="code-keyword">and</span> flavor:<br>
+&nbsp;&nbsp;instance_uuid = instance.uuid<br>
+&nbsp;&nbsp;<span class="code-keyword">with</span> compute_utils.<span class="code-function">EventReporter</span>(context, <span class="code-string">'cold_migrate'</span>,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;self.host, instance_uuid):<br>
+&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">self</span>.<span class="code-function">_cold_migrate</span>(context, instance, flavor,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;scheduler_hint[<span class="code-string">'filter_properties'</span>],<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;clean_shutdown, request_spec,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;host_list)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>The conductor decides this is a cold move and starts the cold-migrate workflow.</strong> Live migration and rebuild branch off elsewhere; this is the path for "power it off and move it."
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Move the source allocation to the migration UUID</h2>
+          <p>Before scheduling, the instance's existing allocation on the source node is reassigned to the <span class="term" data-definition="A unique ID for the Migration database record that tracks this move. While the resize is in flight, this UUID — not the instance UUID — owns the source resources in Placement, so confirm and revert have a single object to act on.">migration UUID</span>. This frees the instance consumer to receive a fresh <span class="term" data-definition="A record in Placement that says how much CPU, RAM and disk a given consumer holds on a given resource provider (host). Moving an allocation re-labels who owns it without changing the numbers.">allocation</span> on the destination, and gives a single object — the migration — that "owns" the source resources for confirm/revert.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">conductor/tasks/migrate.py</span><br>
+success = reportclient.<span class="code-function">move_allocations</span>(context,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instance.uuid,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;migration.uuid)<br>
+<span class="code-keyword">if</span> <span class="code-keyword">not</span> success:<br>
+&nbsp;&nbsp;...<br>
+&nbsp;&nbsp;<span class="code-keyword">raise</span> exception.<span class="code-function">NoValidHost</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;reason=_(<span class="code-string">'Unable to replace instance claim on source'</span>))
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>The server's reservation on the old host is re-labelled as belonging to the migration, not the server.</strong> If Placement refuses the swap, the conductor treats it like "no room" and raises <code>NoValidHost</code>, aborting the move cleanly.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Ask the scheduler for a destination</h2>
+          <p><code>select_destinations</code> returns a selected host plus alternates; as a side effect it claims the new-flavor resources in Placement against the instance UUID on the chosen node. This is the one place a blocking RPC <strong>call</strong> reaches into the scheduler.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">conductor/tasks/migrate.py</span><br>
+selection_lists = <span class="code-keyword">self</span>.query_client.<span class="code-function">select_destinations</span>(<br>&nbsp;&nbsp;<span class="code-keyword">self</span>.context, <span class="code-keyword">self</span>.request_spec, [<span class="code-keyword">self</span>.instance.uuid],<br>&nbsp;&nbsp;return_objects=<span class="code-keyword">True</span>, return_alternates=<span class="code-keyword">True</span>)<br>
+...<br>
+selection, <span class="code-keyword">self</span>.host_list = selection_list[<span class="code-number">0</span>], selection_list[<span class="code-number">1</span>:]<br>
+scheduler_utils.<span class="code-function">fill_provider_mapping</span>(<span class="code-keyword">self</span>.request_spec, selection)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>The scheduler picks where the server should go and reserves the new resources there.</strong> <code>return_alternates=True</code> brings back backup hosts so the destination can retry elsewhere if its claim fails. The new allocation lands on the instance UUID, while the migration UUID still holds the source.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Cast prep_resize to the destination compute</h2>
+          <p>The task casts to the chosen destination host to begin the move. If the selected host is in another cell, it instead launches a <span class="term" data-definition="A cell is a self-contained slice of a Nova deployment with its own database and message queue. Most resizes stay within one cell; crossing cells uses a snapshot-based variant called CrossCellMigrationTask.">cell</span>-crossing <code>CrossCellMigrationTask</code> (a snapshot-based resize) instead.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">conductor/tasks/migrate.py</span><br>
+<span class="code-comment"># RPC cast to the destination host to start the migration process.</span><br>
+<span class="code-keyword">self</span>.compute_rpcapi.<span class="code-function">prep_resize</span>(<br>&nbsp;&nbsp;<span class="code-keyword">self</span>.context, <span class="code-keyword">self</span>.instance, <span class="code-keyword">self</span>.request_spec.image,<br>&nbsp;&nbsp;<span class="code-keyword">self</span>.flavor, host, migration,<br>&nbsp;&nbsp;request_spec=<span class="code-keyword">self</span>.request_spec, filter_properties=legacy_props,<br>&nbsp;&nbsp;node=node, clean_shutdown=<span class="code-keyword">self</span>.clean_shutdown,<br>&nbsp;&nbsp;host_list=<span class="code-keyword">self</span>.host_list)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>Tell the destination host "prepare to receive this server."</strong> Another <code>cast</code> — fire-and-forget — carrying the migration record, the new flavor, and the list of alternate hosts so the destination can reschedule itself if its local claim fails.
+            </div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">Conductor's bookkeeping — the ledger and the allocation swap</span></div>
+            <div class="ops-check-body">
+              <span class="note"># the migration row now exists, status pre-migrating, and knows both hosts</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack server migration list --server $UUID</span><br>
+              <span class="out">| 42 | qh2-rcc001 | qh2-rcc002 | <span class="hl">pre-migrating</span> | migration_type: resize |</span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT uuid, status, source_compute, dest_compute, migration_type FROM nova.migrations WHERE instance_uuid='$UUID' ORDER BY id DESC LIMIT 1;</span><br>
+              <br>
+              <span class="note"># placement shows the swap: the MIGRATION uuid holds the source, the INSTANCE the dest claim</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider allocation show $MIGRATION_UUID</span>  <span class="out">→ old flavor on the source node</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider allocation show $UUID</span>  <span class="out">→ new flavor on the dest node</span><br>
+              <br>
+              <span class="note"># migration row exists but never leaves pre-migrating → the prep_resize cast was lost,</span><br>
+              <span class="note"># or nova-compute on the DEST is down; NoValidHost at this stage shows in conductor logs</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 3 — MOVE THE DISK ════════════ -->
+  <section class="module" id="module-3" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">03</span>
+        <h1 class="module-title">Destination claims, source moves the disk</h1>
+        <p class="module-subtitle">The destination reserves local resources and bounces the work back to the source. The source then powers off the guest, copies the disk over, and re-points the instance at the new host. States: <code>RESIZE_MIGRATING → RESIZE_MIGRATED</code>.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Destination resize_claim, then cast back to source</h2>
+          <p>The destination claims local resources inside a <code>Claim</code> context manager — checking NUMA topology and PCI devices actually fit, and creating the <span class="term" data-definition="A record attached to the instance during a move that captures the old and new flavor, the source/dest nodes, and the resource limits. It lets compute reason about both sides of the resize and roll back if needed.">MigrationContext</span>. On success it casts <code>resize_instance</code> to the source. If the claim fails, <code>_revert_allocation</code> cleans up and a reschedule to an alternate may be attempted.</p>
+          <div class="state-track">
+            <span class="state-pill vm">vm: ACTIVE/STOPPED</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill task">task: RESIZE_PREP</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill task">task: RESIZE_MIGRATING</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill task">task: RESIZE_MIGRATED</span>
+          </div>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/manager.py — _prep_resize (dest)</span><br>
+<span class="code-keyword">with</span> <span class="code-keyword">self</span>.rt.<span class="code-function">resize_claim</span>(<br>&nbsp;&nbsp;context, instance, flavor, node, migration, allocs,<br>&nbsp;&nbsp;image_meta=image, limits=limits,<br>) <span class="code-keyword">as</span> claim:<br>
+&nbsp;&nbsp;LOG.<span class="code-function">info</span>(<span class="code-string">'Migrating'</span>, instance=instance)<br>
+&nbsp;&nbsp;<span class="code-comment"># RPC cast to the source host to start the actual resize/migration.</span><br>
+&nbsp;&nbsp;<span class="code-keyword">self</span>.compute_rpcapi.<span class="code-function">resize_instance</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;context, instance, claim.migration, image,<br>&nbsp;&nbsp;&nbsp;&nbsp;flavor, request_spec, clean_shutdown)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>The new host reserves room for the server, then tells the old host to start sending the disk.</strong> The claim is the destination's local promise that NUMA, PCI and capacity all fit. Only once it holds does the source begin the heavy lifting.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Source powers off and copies the disk</h2>
+          <p>On the source, <code>resize_instance</code> flips <code>task_state</code> to <code>RESIZE_MIGRATING</code>, then the virt driver powers off the guest, unplugs VIFs, disconnects volumes, and copies the disk images to the destination (skipping swap, which <code>finish_migration</code> recreates).</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">virt/libvirt/driver.py — migrate_disk_and_power_off</span><br>
+<span class="code-keyword">self</span>.<span class="code-function">power_off</span>(instance, timeout, retry_interval)<br>
+<span class="code-keyword">self</span>.<span class="code-function">unplug_vifs</span>(instance, network_info)<br>
+block_device_mapping = driver.<span class="code-function">block_device_info_get_mapping</span>(<br>&nbsp;&nbsp;block_device_info)<br>
+<span class="code-keyword">for</span> vol <span class="code-keyword">in</span> block_device_mapping:<br>
+&nbsp;&nbsp;connection_info = vol[<span class="code-string">'connection_info'</span>]<br>
+&nbsp;&nbsp;<span class="code-keyword">self</span>.<span class="code-function">_disconnect_volume</span>(context, connection_info, instance)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>Shut the server down cleanly and copy its disk to the new machine.</strong> Because the guest is powered off first, the disk is consistent when it is copied — this is what makes it a <em>cold</em> move rather than a live one.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Source retargets the instance and casts finish_resize</h2>
+          <p>After the disk is copied and networking is started, the source updates the instance's <code>host</code>/<code>node</code>/<code>compute_id</code> to the destination, stashes the old flavor, sets <code>RESIZE_MIGRATED</code>, and casts <code>finish_resize</code> to the destination.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/manager.py — _resize_instance (source)</span><br>
+instance.host = migration.dest_compute<br>
+instance.node = migration.dest_node<br>
+instance.compute_id = migration.<span class="code-function">get_dest_compute_id</span>()<br>
+instance.old_flavor = instance.flavor<br>
+instance.task_state = task_states.RESIZE_MIGRATED<br>
+instance.<span class="code-function">save</span>(expected_task_state=task_states.RESIZE_MIGRATING)<br>
+<span class="code-comment"># RPC cast to the destination host to finish the resize/migration.</span><br>
+<span class="code-keyword">self</span>.compute_rpcapi.<span class="code-function">finish_resize</span>(context, instance,<br>&nbsp;&nbsp;migration, image, disk_info, migration.dest_compute,<br>&nbsp;&nbsp;request_spec)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>The server now officially "lives" on the new host; tell that host to finish the job.</strong> This single line — <code>instance.host = migration.dest_compute</code> — is the moment ownership changes hands. Keeping <code>old_flavor</code> means a revert can restore the original size.
+            </div>
+          </div>
+          <div class="callout callout-info">
+            <div class="callout-icon">📍</div>
+            <div class="callout-content">
+              <span class="callout-title">The host flips on the source, not the destination</span>
+              <p>It is the <em>source</em> compute, in <code>_resize_instance</code>, that sets <code>instance.host</code> to the destination — before <code>finish_resize</code> even runs. This detail is a favourite exam question.</p>
+            </div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">The disk is moving — task_state and migration status tell you which host is working</span></div>
+            <div class="ops-check-body">
+              <span class="note"># the ladder: resize_prep → resize_migrating (source copying) → resize_migrated (handed over) → resize_finish (dest)</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack server show $UUID -c OS-EXT-STS:task_state -c OS-EXT-SRV-ATTR:host</span><br>
+              <span class="out">| <span class="hl">resize_migrating</span> | qh2-rcc001 |   <span class="note"># host flips to the dest the moment resize_migrated is saved</span></span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT task_state, host, node FROM nova.instances WHERE uuid='$UUID';</span>  <span class="out">(cell DB — same truth)</span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT status FROM nova.migrations WHERE uuid='$MIGRATION_UUID';</span>  <span class="out">→ <span class="hl">migrating</span></span><br>
+              <br>
+              <span class="note"># frozen at resize_migrating → the disk copy is still running (or died) on the SOURCE —</span><br>
+              <span class="note"># watch the source's nova-compute log and the rsync/scp between the hosts</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack server event list $UUID</span>   <span class="note"># the resize action journals every hop with its host</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 4 — FINISH ON DESTINATION ════════════ -->
+  <section class="module" id="module-4" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">04</span>
+        <h1 class="module-title">Destination finishes the move</h1>
+        <p class="module-subtitle"><code>finish_resize</code> on the destination repoints networking and storage, recreates the guest at its new size, and lands the instance in <code>vm_state=RESIZED</code> — the state you see as VERIFY_RESIZE. States: <code>RESIZE_FINISH → RESIZED</code>.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Finish networking and volumes on the destination</h2>
+          <p>Neutron port bindings are switched to this host with <code>migrate_instance_finish</code>, then volume attachments are updated with this host's connector before the driver recreates the guest.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/manager.py — _finish_resize (dest)</span><br>
+<span class="code-keyword">self</span>.network_api.<span class="code-function">migrate_instance_finish</span>(<br>&nbsp;&nbsp;context, instance, migration, provider_mappings)<br>
+network_info = <span class="code-keyword">self</span>.network_api.<span class="code-function">get_instance_nw_info</span>(context, instance)<br>
+instance.task_state = task_states.RESIZE_FINISH<br>
+instance.<span class="code-function">save</span>(expected_task_state=task_states.RESIZE_MIGRATED)<br>
+...<br>
+<span class="code-keyword">self</span>.<span class="code-function">_update_volume_attachments</span>(context, instance, bdms)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>Point the network and storage at the new host before booting the server there.</strong> <code>migrate_instance_finish</code> tells Neutron each port's <code>binding:host_id</code> is now the destination, and the volume attachments are rewritten with the destination's connector.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Recreate the guest and land in RESIZED</h2>
+          <p>After <code>finish_migration</code> spawns the guest and the volume attachments are completed, the migration is marked finished and the instance enters <code>vm_state=RESIZED</code> — the state the user sees as VERIFY_RESIZE.</p>
+          <div class="state-track">
+            <span class="state-pill task">task: RESIZE_FINISH</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill task">migration: finished</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill done">vm: RESIZED (VERIFY_RESIZE)</span>
+          </div>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/manager.py — _finish_resize (dest)</span><br>
+migration.status = <span class="code-string">'finished'</span><br>
+migration.<span class="code-function">save</span>()<br>
+instance.vm_state = vm_states.RESIZED<br>
+instance.task_state = <span class="code-keyword">None</span><br>
+instance.launched_at = timeutils.<span class="code-function">utcnow</span>()<br>
+instance.<span class="code-function">save</span>(expected_task_state=task_states.RESIZE_FINISH)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>The server is up on the new host and waiting for the user to confirm or undo the move.</strong> <code>task_state=None</code> means nothing is in flight; the ball is now in your court. Note the source copy is still on disk, and the migration UUID still holds the source allocation.
+            </div>
+          </div>
+          <div class="callout callout-warning">
+            <div class="callout-icon">⏳</div>
+            <div class="callout-content">
+              <span class="callout-title">RESIZED is a holding state, not a finish line</span>
+              <p>The move is not complete until you act. The old guest and its Placement allocation are deliberately kept so a revert is possible. Many deployments auto-confirm after a timeout via <code>resize_confirm_window</code>.</p>
+            </div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">VERIFY_RESIZE — two copies exist, two allocations held</span></div>
+            <div class="ops-check-body">
+              <span class="prompt">$ </span><span class="cmd">openstack server show $UUID -c status -c OS-EXT-STS:vm_state -c flavor -c OS-EXT-SRV-ATTR:host</span><br>
+              <span class="out">| <span class="hl">VERIFY_RESIZE</span> | resized | m3.large | qh2-rcc002 (the destination) |</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack server migration list --server $UUID</span>  <span class="out">→ status <span class="hl">finished</span></span><br>
+              <br>
+              <span class="note"># the fingerprint of a resize awaiting confirm: BOTH consumers hold allocations</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider allocation show $UUID</span>  <span class="out">→ new flavor on the dest node</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider allocation show $MIGRATION_UUID</span>  <span class="out">→ old flavor still held on the source</span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT status FROM nova.migrations WHERE uuid='$MIGRATION_UUID';</span>  <span class="out">→ finished</span><br>
+              <br>
+              <span class="note"># reached resize_finish but never RESIZED → the dest died mid-finish; check its nova-compute log</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 5 — CONFIRM / REVERT ════════════ -->
+  <section class="module" id="module-5" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">05</span>
+        <h1 class="module-title">You confirm or revert</h1>
+        <p class="module-subtitle">The server sits in RESIZED until you decide. <strong>Confirm</strong> commits the move and deletes the old copy. <strong>Revert</strong> undoes it and restores the original. The two paths run on opposite hosts.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Confirm runs on the source and deletes the old copy</h2>
+          <p><code>confirm_resize</code> is cast from the API to the <strong>source</strong> compute. The driver removes the old guest, the resource tracker drops the old-flavor usage, and the held allocation is removed from Placement.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/manager.py — _confirm_resize (source)</span><br>
+<span class="code-keyword">self</span>.driver.<span class="code-function">confirm_migration</span>(context, migration, instance,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;network_info)<br>
+<span class="code-comment"># Free up the old_flavor usage from the resource tracker for this host.</span><br>
+<span class="code-keyword">self</span>.rt.<span class="code-function">drop_move_claim_at_source</span>(context, instance, migration)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>Throw away the original server and free its old resources.</strong> Confirm is destructive and irreversible — once the old guest is gone, there is nothing to revert to. That is why Nova waits for you to ask for it.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">drop_move_claim_at_source marks the migration confirmed</h2>
+          <p>The migration record is marked <code>'confirmed'</code> and the old-flavor usage on the source node is released, which deletes the migration-held Placement allocation. The instance returns to <code>ACTIVE</code> (or <code>STOPPED</code>).</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/resource_tracker.py</span><br>
+<span class="code-keyword">def</span> <span class="code-function">drop_move_claim_at_source</span>(<span class="code-keyword">self</span>, context, instance, migration):<br>
+&nbsp;&nbsp;<span class="code-string">"""Drop a move claim after confirming a resize or cold migration."""</span><br>
+&nbsp;&nbsp;migration.status = <span class="code-string">'confirmed'</span><br>
+&nbsp;&nbsp;migration.<span class="code-function">save</span>()<br>
+&nbsp;&nbsp;<span class="code-keyword">self</span>.<span class="code-function">_drop_move_claim</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;context, instance, migration.source_node, instance.old_flavor,<br>&nbsp;&nbsp;&nbsp;&nbsp;prefix=<span class="code-string">'old_'</span>)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>Record the move as final and reclaim the old host's capacity.</strong> The <code>'old_'</code> prefix tells the tracker to release the <em>previous</em> flavor's bookkeeping. After this, the source host shows the freed CPU/RAM/disk again.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Revert destroys the dest copy and casts back to source</h2>
+          <p><code>revert_resize</code> runs on the <strong>destination</strong> first: it tears down dest networking, destroys the dest guest, terminates dest volume connections, drops the new-flavor claim (<code>drop_move_claim_at_dest</code>, migration → <code>'reverted'</code>), then casts <code>finish_revert_resize</code> back to the source.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/manager.py — revert_resize (dest)</span><br>
+<span class="code-comment"># Free up the new_flavor usage from the resource tracker for this</span><br>
+<span class="code-comment"># host.</span><br>
+<span class="code-keyword">self</span>.rt.<span class="code-function">drop_move_claim_at_dest</span>(context, instance, migration)<br>
+<span class="code-comment"># RPC cast back to the source host to finish the revert there.</span><br>
+<span class="code-keyword">self</span>.compute_rpcapi.<span class="code-function">finish_revert_resize</span>(context, instance,<br>&nbsp;&nbsp;&nbsp;&nbsp;migration, migration.source_compute, request_spec)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>Delete the new copy, free the new host, and tell the old host to bring the server back.</strong> Revert is the mirror image of confirm: it runs first on the destination (which now holds the guest) and then hands control back to the source.
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Source moves the allocation back to the instance</h2>
+          <p>On the source, <code>finish_revert_resize</code> reverts the flavor/host/node and moves the allocation from the migration UUID <em>back</em> to the instance UUID, so the instance again owns its resources on the original host. The original guest is recreated and the instance ends <code>ACTIVE</code>/<code>STOPPED</code>.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">compute/manager.py — _revert_allocation (source)</span><br>
+<span class="code-keyword">def</span> <span class="code-function">_revert_allocation</span>(<span class="code-keyword">self</span>, context, instance, migration):<br>
+&nbsp;&nbsp;<span class="code-string">"""Revert an allocation that is held by migration to our instance."""</span><br>
+&nbsp;&nbsp;orig_alloc = <span class="code-keyword">self</span>.reportclient.<span class="code-function">get_allocations_for_consumer</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;context, migration.uuid)<br>
+&nbsp;&nbsp;...<br>
+&nbsp;&nbsp;<span class="code-keyword">self</span>.reportclient.<span class="code-function">move_allocations</span>(context, migration.uuid,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instance.uuid)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>Give the server's original resource reservation back to the server on its old host.</strong> This is the exact inverse of the swap in Module 2: <code>move_allocations(migration.uuid, instance.uuid)</code> instead of the other way round.
+            </div>
+          </div>
+          <div class="callout callout-success">
+            <div class="callout-icon">↩️</div>
+            <div class="callout-content">
+              <span class="callout-title">Symmetry is the whole trick</span>
+              <p>The migration UUID acts as a safe-deposit box for the source allocation. Confirm throws the box away; revert opens it and hands the contents back to the instance. Either way Placement stays consistent.</p>
+            </div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">After confirm (or revert) — the ledger must be clean</span></div>
+            <div class="ops-check-body">
+              <span class="prompt">$ </span><span class="cmd">openstack server migration list --server $UUID</span>  <span class="out">→ status <span class="hl">confirmed</span> (or <span class="hl">reverted</span>)</span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT status FROM nova.migrations WHERE uuid='$MIGRATION_UUID';</span>  <span class="out">→ confirmed | reverted</span><br>
+              <br>
+              <span class="note"># the migration's safe-deposit box must now be empty — one consumer, one host</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider allocation show $MIGRATION_UUID</span>  <span class="out">→ (empty ✓)</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider allocation show $UUID</span>  <span class="out">→ a single compute node</span><br>
+              <br>
+              <span class="note"># stuck in VERIFY_RESIZE? confirm it yourself, or check resize_confirm_window auto-confirm</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack server resize confirm $UUID</span><br>
+              <span class="note"># leaked allocations after a botched confirm show up in the placement audit</span><br>
+              <span class="prompt">$ </span><span class="cmd">nova-manage placement audit --verbose</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 6 — FULL JOURNEY ════════════ -->
+  <section class="module" id="module-6" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">06</span>
+        <h1 class="module-title">The full journey, animated</h1>
+        <p class="module-subtitle">Press <strong>Next step</strong> to watch the work travel between two compute hosts and back. Notice the CAST/CALL/REST tags, and how the two computes hand the instance to each other.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <div class="flow-animation" id="resize-flow" data-steps='[
+            {"highlight":"api","label":"1. You send POST resize/migrate (REST). nova-api validates the flavor and checks upsize quota."},
+            {"highlight":"api","label":"2. nova-api loads the RequestSpec, sets the new flavor and NUMA/PCI requests, and sets task_state RESIZE_PREP."},
+            {"from":"api","to":"conductor","packet":true,"highlight":"conductor","label":"3. nova-api CASTS resize_instance to conductor (do_cast=True) and returns to the user."},
+            {"highlight":"conductor","label":"4. conductor.migrate_server routes to _cold_migrate and builds a MigrationTask."},
+            {"highlight":"conductor","label":"5. MigrationTask creates a pre-migrating Migration record."},
+            {"from":"conductor","to":"placement","packet":true,"highlight":"placement","label":"6. conductor moves the source allocation from instance UUID to migration UUID (move_allocations, REST)."},
+            {"from":"conductor","to":"scheduler","packet":true,"highlight":"scheduler","label":"7. conductor CALLS select_destinations to pick a destination host plus alternates — and waits."},
+            {"from":"scheduler","to":"placement","packet":true,"highlight":"placement","label":"8. the scheduler claims new-flavor resources on the destination node against the instance UUID (REST)."},
+            {"from":"conductor","to":"compute_dst","packet":true,"highlight":"compute_dst","label":"9. conductor CASTS prep_resize to the destination compute."},
+            {"from":"compute_dst","to":"placement","packet":true,"highlight":"compute_dst","label":"10. the destination resource tracker runs resize_claim, creating MigrationContext and claiming NUMA/PCI/local resources."},
+            {"from":"compute_dst","to":"compute_src","packet":true,"highlight":"compute_src","label":"11. the destination CASTS resize_instance back to the source compute."},
+            {"highlight":"compute_src","label":"12. source sets task_state RESIZE_MIGRATING and migration.status migrating."},
+            {"from":"compute_src","to":"libvirt","packet":true,"highlight":"libvirt","label":"13. libvirt migrate_disk_and_power_off powers off the guest and copies disk images to the destination."},
+            {"from":"compute_src","to":"cinder","packet":true,"highlight":"cinder","label":"14. source terminates source volume connections / swaps to empty attachments (REST)."},
+            {"from":"compute_src","to":"neutron","packet":true,"highlight":"neutron","label":"15. source calls migrate_instance_start to activate the destination port bindings (REST)."},
+            {"highlight":"compute_src","label":"16. source sets instance.host/node/compute_id to the destination, stashes old_flavor, sets RESIZE_MIGRATED."},
+            {"from":"compute_src","to":"compute_dst","packet":true,"highlight":"compute_dst","label":"17. source CASTS finish_resize to the destination compute."},
+            {"from":"compute_dst","to":"neutron","packet":true,"highlight":"neutron","label":"18. destination calls migrate_instance_finish to update port binding:host_id to this host (REST)."},
+            {"from":"compute_dst","to":"cinder","packet":true,"highlight":"cinder","label":"19. destination updates volume attachments with its host connector — swap connectors (REST)."},
+            {"from":"compute_dst","to":"libvirt","packet":true,"highlight":"libvirt","label":"20. libvirt finish_migration recreates and powers on the guest at its new size."},
+            {"highlight":"compute_dst","label":"21. destination sets migration.status finished, vm_state RESIZED, task_state None (server in VERIFY_RESIZE)."},
+            {"from":"api","to":"compute_src","packet":true,"highlight":"compute_src","label":"22. ON CONFIRM: nova-api casts confirm_resize to the source; libvirt confirm_migration deletes the old guest."},
+            {"from":"compute_src","to":"placement","packet":true,"highlight":"placement","label":"23. confirm deletes the migration-held source allocation; resource tracker drops old-flavor usage; vm_state ACTIVE (REST)."},
+            {"from":"api","to":"compute_dst","packet":true,"highlight":"compute_dst","label":"24. ON REVERT: nova-api casts revert_resize to the destination; dest destroys its guest, drops the new claim, casts finish_revert_resize to source."},
+            {"from":"compute_src","to":"placement","packet":true,"highlight":"placement","label":"25. ON REVERT: the source moves the allocation from migration UUID back to instance UUID, rebuilds the original guest, vm_state ACTIVE (REST)."}
+          ]'>
+            <div class="flow-actors">
+              <div class="flow-actor active" id="flow-api"><div class="flow-actor-icon">API</div><span>nova-api</span></div>
+              <div class="flow-actor" id="flow-conductor"><div class="flow-actor-icon">CO</div><span>conductor</span></div>
+              <div class="flow-actor" id="flow-scheduler"><div class="flow-actor-icon">SC</div><span>scheduler</span></div>
+              <div class="flow-actor" id="flow-compute_src"><div class="flow-actor-icon">CS</div><span>compute src</span></div>
+              <div class="flow-actor" id="flow-compute_dst"><div class="flow-actor-icon">CD</div><span>compute dst</span></div>
+              <div class="flow-actor" id="flow-placement"><div class="flow-actor-icon">PL</div><span>placement</span></div>
+              <div class="flow-actor" id="flow-neutron"><div class="flow-actor-icon">NE</div><span>neutron</span></div>
+              <div class="flow-actor" id="flow-cinder"><div class="flow-actor-icon">CI</div><span>cinder</span></div>
+              <div class="flow-actor" id="flow-libvirt"><div class="flow-actor-icon">VM</div><span>libvirt</span></div>
+            </div>
+            <div class="flow-packet"></div>
+            <div class="flow-step-label">Click "Next step" to begin the journey</div>
+            <div class="flow-controls">
+              <button class="btn btn-primary flow-next-btn">Next step →</button>
+              <button class="btn flow-reset-btn">Reset</button>
+              <span class="flow-progress">Step 0 / 25</span>
+            </div>
+          </div>
+          <div class="callout callout-accent">
+            <div class="callout-icon">🔎</div>
+            <div class="callout-content">
+              <span class="callout-title">One call, many casts — and a ping-pong between computes</span>
+              <p>There is exactly <em>one</em> blocking RPC call (conductor → scheduler, step 7). Everything between Nova services is a non-blocking cast — including the round trip dest → source → dest that hands the instance across hosts. Steps 22–23 are the confirm path; 24–25 are the alternative revert path.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 7 — FAILURES ════════════ -->
+  <section class="module" id="module-7" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">07</span>
+        <h1 class="module-title">When it goes wrong</h1>
+        <p class="module-subtitle">A move can fail at four distinct points, and the recovery differs at each. The migration UUID and the host_list of alternates are what make clean rollback possible.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">NoValidHost at schedule time → roll the allocation back</h2>
+          <p>If <code>select_destinations</code> finds no host (or <code>move_allocations</code> fails, mimicking "no space"), <code>MigrationTask.rollback()</code> sets <code>migration.status='error'</code> and calls <code>revert_allocation_for_migration</code> to move the source allocation back to the instance. <code>_cold_migrate</code> then resets <code>vm_state</code> and notifies.</p>
+          <div class="callout callout-warning">
+            <div class="callout-icon">🚫</div>
+            <div class="callout-content">
+              <span class="callout-title">The server never leaves the source</span>
+              <p>Because nothing moved yet, recovery is simply un-swapping the allocation. The instance stays where it was, in its original state, with a fault recorded. Code: <span class="src">conductor/tasks/migrate.py rollback() · conductor/manager.py _cold_migrate()</span></p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">prep_resize claim failure → reschedule to an alternate</h2>
+          <p>If <code>prep_resize</code> raises on the destination, <code>_revert_allocation</code> drops the dest allocation and <code>_reschedule_resize_or_reraise</code> tries an alternate host from the <code>host_list</code> — casting <code>resize_instance</code> back to the conductor. A <code>BuildAbortException</code> (for example a PCI or placement mapping failure) skips reschedule and just reverts.</p>
+          <div class="step-cards stagger-children">
+            <div class="step-card animate-in"><div class="step-num">1</div><div class="step-body"><strong>Drop the dest claim</strong><p><code>_revert_allocation</code> removes the failed destination's reservation so its capacity is freed.</p></div></div>
+            <div class="step-card animate-in"><div class="step-num">2</div><div class="step-body"><strong>Try the next alternate</strong><p><code>_reschedule_resize_or_reraise</code> pulls the next host from <code>host_list</code> and casts back to the conductor to retry.</p></div></div>
+            <div class="step-card animate-in"><div class="step-num">3</div><div class="step-body"><strong>Abort if pointless</strong><p>A <code>BuildAbortException</code> means another host would fail identically, so Nova reverts and errors instead of retrying.</p></div></div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">resize_instance failure on the source → return the allocation</h2>
+          <p><code>resize_instance</code> wraps <code>_resize_instance</code>; on any exception it calls <code>_revert_allocation(context, instance, migration)</code> to return the source allocation to the instance. The server is still on the source and recoverable.</p>
+          <div class="callout callout-info">
+            <div class="callout-icon">🩹</div>
+            <div class="callout-content">
+              <span class="callout-title">Fail before the host flips, recover on the source</span>
+              <p>This handler runs while <code>instance.host</code> may still point at the source. Moving the allocation back to the instance UUID restores the pre-resize world. Code: <span class="src">compute/manager.py resize_instance()</span></p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">finish_resize failure on the dest → recover on the destination</h2>
+          <p>By the time <code>finish_resize</code> runs, <code>instance.host</code> already points at the destination. So on failure it deletes the source-node allocation held by the migration (<code>_delete_allocation_after_move</code>), leaving the <em>dest</em> allocation intact — so a hard reboot can recover the guest on the destination rather than the source.</p>
+          <div class="callout callout-warning">
+            <div class="callout-icon">⚠️</div>
+            <div class="callout-content">
+              <span class="callout-title">The recovery direction flips with ownership</span>
+              <p>Once the host has flipped to the destination, rolling back to the source would be wrong — the disk is already there. So this late failure keeps the destination allocation and lets a reboot finish the job. Code: <span class="src">compute/manager.py finish_resize()</span></p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 8 — QUIZ ════════════ -->
+  <section class="module" id="module-8" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">08</span>
+        <h1 class="module-title">Check yourself</h1>
+        <p class="module-subtitle">Three questions and a matching exercise. If these click, you understand the resize flow.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Quiz</h2>
+          <div class="quiz-container" id="quiz1">
+            <div class="quiz-question-block" data-correct="b"
+                 data-explanation-right="replace_allocation_with_migration calls move_allocations(instance.uuid, migration.uuid) so the migration record owns the source allocation; confirm deletes it and revert moves it back."
+                 data-explanation-wrong="It is not deleted at start (a) — that would lose the ability to revert — and it does not stay on the instance UUID (c), because the instance UUID must be free to receive the new destination allocation.">
+              <div class="quiz-question">During a resize, where does the instance's original (source) allocation live in Placement while the move is in progress?</div>
+              <div class="quiz-options">
+                <button class="quiz-option" data-value="a" onclick="selectOption(this)"><span class="quiz-option-radio"></span>It is deleted immediately and recreated on confirm.</button>
+                <button class="quiz-option" data-value="b" onclick="selectOption(this)"><span class="quiz-option-radio"></span>It is moved from the instance UUID to the migration record's UUID.</button>
+                <button class="quiz-option" data-value="c" onclick="selectOption(this)"><span class="quiz-option-radio"></span>It stays on the instance UUID on the source node until finish_resize.</button>
+              </div>
+              <div class="quiz-feedback"></div>
+            </div>
+
+            <div class="quiz-question-block" data-correct="b"
+                 data-explanation-right="confirm_resize is cast to migration.source_compute; it calls driver.confirm_migration, drop_move_claim_at_source, and deletes the migration-held Placement allocation."
+                 data-explanation-wrong="The guest is already running on the destination after finish_resize (a), and confirm is a same-cell compute cast, not a conductor reschedule (c).">
+              <div class="quiz-question">Which host runs <code>confirm_resize</code>, and what does it do?</div>
+              <div class="quiz-options">
+                <button class="quiz-option" data-value="a" onclick="selectOption(this)"><span class="quiz-option-radio"></span>The destination host; it powers on the new guest.</button>
+                <button class="quiz-option" data-value="b" onclick="selectOption(this)"><span class="quiz-option-radio"></span>The source host; it deletes the old guest and drops the source allocation.</button>
+                <button class="quiz-option" data-value="c" onclick="selectOption(this)"><span class="quiz-option-radio"></span>The conductor; it reschedules the instance.</button>
+              </div>
+              <div class="quiz-feedback"></div>
+            </div>
+
+            <div class="quiz-question-block" data-correct="c"
+                 data-explanation-right="In _resize_instance the source sets instance.host/node/compute_id to migration.dest_compute and old_flavor, then sets RESIZE_MIGRATED and casts finish_resize."
+                 data-explanation-wrong="finish_resize (a) sets the flavor and vm_state RESIZED but the host is already updated; prep_resize (b) only claims resources on the dest and casts back to the source.">
+              <div class="quiz-question">What sets <code>instance.host</code> to the destination, and when?</div>
+              <div class="quiz-options">
+                <button class="quiz-option" data-value="a" onclick="selectOption(this)"><span class="quiz-option-radio"></span>finish_resize on the destination, after spawning the guest.</button>
+                <button class="quiz-option" data-value="b" onclick="selectOption(this)"><span class="quiz-option-radio"></span>prep_resize on the destination, during the resource claim.</button>
+                <button class="quiz-option" data-value="c" onclick="selectOption(this)"><span class="quiz-option-radio"></span>resize_instance on the source, after copying the disk and before casting finish_resize.</button>
+              </div>
+              <div class="quiz-feedback"></div>
+            </div>
+
+            <button class="quiz-check-btn" onclick="checkQuiz('quiz1')">Check answers</button>
+            <button class="quiz-reset-btn" onclick="resetQuiz('quiz1')">Reset</button>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Match each player to its job</h2>
+          <p>Drag each service or method onto the task it performs during a resize.</p>
+          <div class="dnd-container" id="match1">
+            <div class="dnd-chips">
+              <div class="dnd-chip" draggable="true" data-answer="api">nova-api</div>
+              <div class="dnd-chip" draggable="true" data-answer="migrationtask">MigrationTask (conductor)</div>
+              <div class="dnd-chip" draggable="true" data-answer="finish">nova-compute dest (finish_resize)</div>
+              <div class="dnd-chip" draggable="true" data-answer="placement">Placement</div>
+              <div class="dnd-chip" draggable="true" data-answer="libvirt">libvirt migrate_disk_and_power_off</div>
+            </div>
+            <div class="dnd-zones">
+              <div class="dnd-zone" data-correct="api"><div class="dnd-zone-label">Validate flavor, check upsize quota, set RESIZE_PREP, cast to conductor</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="migrationtask"><div class="dnd-zone-label">Create the Migration record, move source allocation to migration UUID, call the scheduler, cast prep_resize</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="finish"><div class="dnd-zone-label">Update Neutron bindings and volume attachments to this host and spawn the guest, ending in vm_state RESIZED</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="placement"><div class="dnd-zone-label">Hold the source allocation under the migration UUID; receive the dest allocation under the instance UUID; cleaned up on confirm/revert</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="libvirt"><div class="dnd-zone-label">Power off the guest on the source and copy its disk images to the destination host</div><div class="dnd-zone-target">Drop here</div></div>
+            </div>
+            <div style="margin-top: var(--space-6);">
+              <button class="btn btn-primary" onclick="checkDnD('match1')">Check matches</button>
+              <button class="btn" onclick="resetDnD('match1')">Reset</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <div class="callout callout-success">
+            <div class="callout-icon">🚀</div>
+            <div class="callout-content">
+              <span class="callout-title">You've traced a full resize</span>
+              <p>From <code>POST resize</code> to <code>vm_state=RESIZED</code> and on to confirm or revert: validation in the API, an allocation swap to the migration UUID, a scheduler pick, a disk copy between two computes, and a clean rollback story at every failure point. That's the whole journey.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <div class="footer">
+    Traced from the OpenStack Nova source on branch <code>nectar/2024.1</code>. Code snippets are exact excerpts. Built in the codebase-to-course visual style.
+  </div>
+
+  </main>
+
+  <script>
+  (function () {
+    'use strict';
+    function $(sel, ctx) { return (ctx || document).querySelector(sel); }
+    function $$(sel, ctx) { return Array.from((ctx || document).querySelectorAll(sel)); }
+
+    /* ── NAV & PROGRESS ── */
+    const progressBar = $('#progress-bar');
+    const navDots = $$('.nav-dot');
+    const modules = $$('.module');
+
+    function updateProgress() {
+      if (!progressBar) return;
+      const scrollTop = window.scrollY;
+      const scrollHeight = document.documentElement.scrollHeight - window.innerHeight;
+      const pct = scrollHeight > 0 ? (scrollTop / scrollHeight) * 100 : 0;
+      progressBar.style.width = pct + '%';
+      progressBar.setAttribute('aria-valuenow', Math.round(pct));
+      updateNavDots();
+    }
+    function updateNavDots() {
+      const scrollMid = window.scrollY + window.innerHeight / 2;
+      modules.forEach((mod, i) => {
+        const dot = navDots[i];
+        if (!dot) return;
+        const top = mod.offsetTop;
+        const bottom = top + mod.offsetHeight;
+        if (scrollMid >= top && scrollMid < bottom) { dot.classList.add('active'); dot.classList.remove('visited'); }
+        else if (window.scrollY + window.innerHeight > top) { dot.classList.remove('active'); dot.classList.add('visited'); }
+        else { dot.classList.remove('active', 'visited'); }
+      });
+    }
+    window.addEventListener('scroll', () => requestAnimationFrame(updateProgress), { passive: true });
+    updateProgress();
+    navDots.forEach(dot => dot.addEventListener('click', () => {
+      const target = $('#' + dot.dataset.target);
+      if (target) target.scrollIntoView({ behavior: 'smooth' });
+    }));
+
+    /* ── KEYBOARD NAV ── */
+    function currentModuleIndex() {
+      const scrollMid = window.scrollY + window.innerHeight / 2;
+      for (let i = 0; i < modules.length; i++) {
+        const top = modules[i].offsetTop, bottom = top + modules[i].offsetHeight;
+        if (scrollMid >= top && scrollMid < bottom) return i;
+      }
+      return 0;
+    }
+    document.addEventListener('keydown', e => {
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { const n = modules[currentModuleIndex() + 1]; if (n) { n.scrollIntoView({ behavior: 'smooth' }); e.preventDefault(); } }
+      if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { const p = modules[currentModuleIndex() - 1]; if (p) { p.scrollIntoView({ behavior: 'smooth' }); e.preventDefault(); } }
+    });
+
+    /* ── REVEAL ── */
+    const revealObserver = new IntersectionObserver(entries => {
+      entries.forEach(entry => { if (entry.isIntersecting) { entry.target.classList.add('visible'); revealObserver.unobserve(entry.target); } });
+    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.08 });
+    $$('.animate-in').forEach(el => revealObserver.observe(el));
+    $$('.stagger-children').forEach(parent => Array.from(parent.children).forEach((child, i) => child.style.setProperty('--stagger-index', i)));
+
+    /* ── GLOSSARY ── */
+    let activeTooltip = null;
+    function positionTooltip(term, tip) {
+      const rect = term.getBoundingClientRect();
+      const tipWidth = Math.min(320, Math.max(200, window.innerWidth * 0.8));
+      let left = rect.left + rect.width / 2 - tipWidth / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - tipWidth - 8));
+      tip.style.left = left + 'px'; tip.style.width = tipWidth + 'px';
+      document.body.appendChild(tip);
+      const tipHeight = tip.offsetHeight;
+      if (rect.top - tipHeight - 12 < 0) { tip.style.top = (rect.bottom + 8) + 'px'; tip.classList.add('flip'); }
+      else { tip.style.top = (rect.top - tipHeight - 8) + 'px'; tip.classList.remove('flip'); }
+    }
+    function showTooltip(term, tip) {
+      if (activeTooltip && activeTooltip !== tip) { activeTooltip.classList.remove('visible'); activeTooltip.remove(); }
+      positionTooltip(term, tip);
+      requestAnimationFrame(() => tip.classList.add('visible'));
+      activeTooltip = tip;
+    }
+    function hideTooltip(tip) {
+      tip.classList.remove('visible');
+      setTimeout(() => { if (!tip.classList.contains('visible')) tip.remove(); }, 150);
+      if (activeTooltip === tip) activeTooltip = null;
+    }
+    $$('.term').forEach(term => {
+      const tip = document.createElement('span');
+      tip.className = 'term-tooltip';
+      tip.textContent = term.dataset.definition;
+      term.addEventListener('mouseenter', () => showTooltip(term, tip));
+      term.addEventListener('mouseleave', () => hideTooltip(tip));
+      term.addEventListener('click', e => { e.stopPropagation(); tip.classList.contains('visible') ? hideTooltip(tip) : showTooltip(term, tip); });
+    });
+    document.addEventListener('click', () => { if (activeTooltip) { activeTooltip.classList.remove('visible'); activeTooltip.remove(); activeTooltip = null; } });
+
+    /* ── QUIZ ── */
+    window.selectOption = function (btn) {
+      const block = btn.closest('.quiz-question-block');
+      $$('.quiz-option', block).forEach(o => o.classList.remove('selected'));
+      btn.classList.add('selected');
+    };
+    window.checkQuiz = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.quiz-question-block', container).forEach(q => {
+        const selected = $('.quiz-option.selected', q);
+        const feedback = $('.quiz-feedback', q);
+        const correct = q.dataset.correct;
+        const rightExp = q.dataset.explanationRight || '';
+        const wrongExp = q.dataset.explanationWrong || '';
+        if (!selected) { feedback.textContent = 'Pick an answer first!'; feedback.className = 'quiz-feedback show warning'; return; }
+        $$('.quiz-option', q).forEach(o => o.disabled = true);
+        if (selected.dataset.value === correct) {
+          selected.classList.add('correct');
+          feedback.innerHTML = '<strong>Exactly!</strong> ' + rightExp;
+          feedback.className = 'quiz-feedback show success';
+        } else {
+          selected.classList.add('incorrect');
+          const correctBtn = $('.quiz-option[data-value="' + correct + '"]', q);
+          if (correctBtn) correctBtn.classList.add('correct');
+          feedback.innerHTML = '<strong>Not quite.</strong> ' + wrongExp;
+          feedback.className = 'quiz-feedback show error';
+        }
+      });
+    };
+    window.resetQuiz = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.quiz-option', container).forEach(o => { o.classList.remove('selected', 'correct', 'incorrect'); o.disabled = false; });
+      $$('.quiz-feedback', container).forEach(f => { f.className = 'quiz-feedback'; f.textContent = ''; });
+    };
+
+    /* ── DND ── */
+    function initDnD(containerEl) {
+      if (!containerEl) return;
+      const chips = $$('.dnd-chip', containerEl);
+      const zones = $$('.dnd-zone', containerEl);
+      chips.forEach(chip => {
+        chip.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', chip.dataset.answer); chip.classList.add('dragging'); });
+        chip.addEventListener('dragend', () => chip.classList.remove('dragging'));
+      });
+      zones.forEach(zone => {
+        const target = $('.dnd-zone-target', zone);
+        if (!target) return;
+        target.addEventListener('dragover', e => { e.preventDefault(); target.classList.add('drag-over'); });
+        target.addEventListener('dragleave', () => target.classList.remove('drag-over'));
+        target.addEventListener('drop', e => {
+          e.preventDefault(); target.classList.remove('drag-over');
+          const answer = e.dataTransfer.getData('text/plain');
+          const chip = $('.dnd-chip[data-answer="' + answer + '"]', containerEl);
+          if (!chip) return;
+          target.textContent = chip.textContent; target.dataset.placed = answer; chip.classList.add('placed');
+        });
+      });
+      chips.forEach(chip => {
+        chip.addEventListener('touchstart', e => {
+          e.preventDefault();
+          const touch = e.touches[0];
+          const ghost = chip.cloneNode(true);
+          ghost.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;left:' + (touch.clientX - 40) + 'px;top:' + (touch.clientY - 20) + 'px;background:var(--color-accent);color:white;padding:0.5rem 1rem;border-radius:9999px;font-size:0.875rem;font-weight:600;opacity:0.85;';
+          document.body.appendChild(ghost); chip._ghost = ghost; chip._answer = chip.dataset.answer;
+        }, { passive: false });
+        chip.addEventListener('touchmove', e => {
+          e.preventDefault(); const touch = e.touches[0];
+          if (chip._ghost) { chip._ghost.style.left = (touch.clientX - 40) + 'px'; chip._ghost.style.top = (touch.clientY - 20) + 'px'; }
+          zones.forEach(z => { const t = $('.dnd-zone-target', z); if (t) t.classList.remove('drag-over'); });
+          const el = document.elementFromPoint(touch.clientX, touch.clientY);
+          const zt = el && el.closest('.dnd-zone-target'); if (zt) zt.classList.add('drag-over');
+        }, { passive: false });
+        chip.addEventListener('touchend', e => {
+          if (chip._ghost) { chip._ghost.remove(); chip._ghost = null; }
+          const touch = e.changedTouches[0];
+          const el = document.elementFromPoint(touch.clientX, touch.clientY);
+          const zt = el && el.closest('.dnd-zone-target');
+          if (zt) { zt.textContent = chip.textContent; zt.dataset.placed = chip._answer; chip.classList.add('placed'); }
+          zones.forEach(z => { const t = $('.dnd-zone-target', z); if (t) t.classList.remove('drag-over'); });
+        });
+      });
+    }
+    window.checkDnD = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.dnd-zone', container).forEach(zone => {
+        const target = $('.dnd-zone-target', zone);
+        if (!target || !target.dataset.placed) return;
+        if (target.dataset.placed === zone.dataset.correct) target.classList.add('correct-placed');
+        else target.classList.add('incorrect-placed');
+      });
+    };
+    window.resetDnD = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.dnd-zone-target', container).forEach(t => { t.textContent = 'Drop here'; delete t.dataset.placed; t.classList.remove('correct-placed', 'incorrect-placed'); });
+      $$('.dnd-chip', container).forEach(c => c.classList.remove('placed', 'dragging'));
+    };
+    $$('.dnd-container').forEach(el => initDnD(el));
+
+    /* ── ARCH DIAGRAM ── */
+    $$('.arch-component').forEach(comp => {
+      comp.addEventListener('click', function () {
+        const diagram = this.closest('.arch-diagram');
+        $$('.arch-component', diagram).forEach(c => c.classList.remove('active'));
+        this.classList.add('active');
+        const descEl = $('.arch-description', diagram);
+        if (descEl) descEl.textContent = this.dataset.desc || '';
+      });
+    });
+
+    /* ── FLOW ANIMATION ── */
+    function initFlow(containerEl) {
+      if (!containerEl) return;
+      const stepsData = JSON.parse(containerEl.dataset.steps || '[]');
+      const labelEl = $('.flow-step-label', containerEl);
+      const progressEl = $('.flow-progress', containerEl);
+      const packet = $('.flow-packet', containerEl);
+      let step = 0;
+      function updateProgress() { if (progressEl) progressEl.textContent = 'Step ' + step + ' / ' + stepsData.length; }
+      function animatePacket(fromId, toId) {
+        if (!packet) return;
+        const fromEl = $('#' + fromId), toEl = $('#' + toId);
+        if (!fromEl || !toEl) return;
+        const fromR = fromEl.getBoundingClientRect(), toR = toEl.getBoundingClientRect(), contR = containerEl.getBoundingClientRect();
+        const fx = fromR.left + fromR.width / 2 - contR.left, fy = fromR.top + fromR.height / 2 - contR.top;
+        const tx = toR.left + toR.width / 2 - contR.left, ty = toR.top + toR.height / 2 - contR.top;
+        packet.style.setProperty('--packet-from-x', fx + 'px'); packet.style.setProperty('--packet-from-y', fy + 'px');
+        packet.style.setProperty('--packet-to-x', tx + 'px'); packet.style.setProperty('--packet-to-y', ty + 'px');
+        packet.style.display = 'block'; packet.style.animation = 'none'; packet.offsetHeight;
+        packet.style.animation = 'packetMove 0.8s var(--ease-in-out) forwards';
+        setTimeout(() => { packet.style.display = 'none'; }, 850);
+      }
+      function next() {
+        if (step >= stepsData.length) return;
+        const s = stepsData[step];
+        $$('.flow-actor', containerEl).forEach(a => a.classList.remove('active'));
+        if (s.highlight) { const hEl = $('#flow-' + s.highlight, containerEl); if (hEl) hEl.classList.add('active'); }
+        if (s.packet && s.from && s.to) animatePacket('flow-' + s.from, 'flow-' + s.to);
+        if (labelEl) labelEl.textContent = s.label || '';
+        step++; updateProgress();
+      }
+      function reset() {
+        step = 0;
+        $$('.flow-actor', containerEl).forEach(a => a.classList.remove('active'));
+        const apiEl = $('#flow-api', containerEl); if (apiEl) apiEl.classList.add('active');
+        if (labelEl) labelEl.textContent = 'Click "Next step" to begin the journey';
+        if (packet) packet.style.display = 'none';
+        updateProgress();
+      }
+      const nextBtn = $('.flow-next-btn', containerEl), resetBtn = $('.flow-reset-btn', containerEl);
+      if (nextBtn) nextBtn.addEventListener('click', next);
+      if (resetBtn) resetBtn.addEventListener('click', reset);
+      updateProgress();
+    }
+    $$('.flow-animation').forEach(el => initFlow(el));
+  })();
+  </script>
+</body>
+</html>

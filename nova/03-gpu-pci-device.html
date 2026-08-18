@@ -1,0 +1,1439 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>GPU &amp; PCI Devices in Nova — The Message Flow</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:opsz,wght@12..96,400;12..96,600;12..96,700;12..96,800&family=DM+Sans:ital,opsz,wght@0,9..40,300;0,9..40,400;0,9..40,500;0,9..40,600;0,9..40,700;1,9..40,400;1,9..40,500&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+
+  <style>
+  /* ── DESIGN TOKENS ─────────────────────────────────────────── */
+  :root {
+    --color-bg:             #FAF7F2;
+    --color-bg-warm:        #F5F0E8;
+    --color-bg-code:        #1E1E2E;
+    --color-text:           #2C2A28;
+    --color-text-secondary: #6B6560;
+    --color-text-muted:     #9E9790;
+    --color-border:         #E5DFD6;
+    --color-border-light:   #EEEBE5;
+    --color-surface:        #FFFFFF;
+    --color-surface-warm:   #FDF9F3;
+
+    /* ACCENT — amber/gold, fitting for GPU & PCI hardware */
+    --color-accent:         #B5791B;
+    --color-accent-hover:   #97640F;
+    --color-accent-light:   #F7EFD9;
+    --color-accent-muted:   #D4A843;
+
+    --color-success:        #2D8B55;
+    --color-success-light:  #E8F5EE;
+    --color-error:          #C93B3B;
+    --color-error-light:    #FDE8E8;
+    --color-info:           #2A7B9B;
+    --color-info-light:     #E4F2F7;
+
+    --color-actor-1:        #D94F30;
+    --color-actor-2:        #2A7B9B;
+    --color-actor-3:        #7B6DAA;
+    --color-actor-4:        #D4A843;
+    --color-actor-5:        #2D8B55;
+
+    --font-display: 'Bricolage Grotesque', Georgia, serif;
+    --font-body:    'DM Sans', -apple-system, sans-serif;
+    --font-mono:    'JetBrains Mono', 'Fira Code', 'Consolas', monospace;
+
+    --text-xs:   0.75rem;
+    --text-sm:   0.875rem;
+    --text-base: 1rem;
+    --text-lg:   1.125rem;
+    --text-xl:   1.25rem;
+    --text-2xl:  1.5rem;
+    --text-3xl:  1.875rem;
+    --text-4xl:  2.25rem;
+    --text-5xl:  3rem;
+    --text-6xl:  3.75rem;
+
+    --leading-tight:  1.15;
+    --leading-snug:   1.3;
+    --leading-normal: 1.6;
+    --leading-loose:  1.8;
+
+    --space-1:  0.25rem; --space-2:  0.5rem; --space-3:  0.75rem;
+    --space-4:  1rem;    --space-5:  1.25rem; --space-6:  1.5rem;
+    --space-8:  2rem;    --space-10: 2.5rem;  --space-12: 3rem;
+    --space-16: 4rem;    --space-20: 5rem;    --space-24: 6rem;
+
+    --content-width:      800px;
+    --content-width-wide: 1000px;
+    --nav-height:         50px;
+
+    --radius-sm:   8px;  --radius-md:   12px;
+    --radius-lg:   16px; --radius-full: 9999px;
+
+    --shadow-sm: 0 1px 2px rgba(44,42,40,0.05);
+    --shadow-md: 0 4px 12px rgba(44,42,40,0.08);
+    --shadow-lg: 0 8px 24px rgba(44,42,40,0.10);
+    --shadow-xl: 0 16px 48px rgba(44,42,40,0.12);
+
+    --ease-out:    cubic-bezier(0.16,1,0.3,1);
+    --ease-in-out: cubic-bezier(0.65,0,0.35,1);
+    --duration-fast:   150ms;
+    --duration-normal: 300ms;
+    --duration-slow:   500ms;
+    --stagger-delay:   120ms;
+  }
+
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  html { scroll-snap-type: y proximity; scroll-behavior: smooth; }
+  body {
+    font-family: var(--font-body);
+    font-size: var(--text-base);
+    color: var(--color-text);
+    line-height: var(--leading-normal);
+    background: var(--color-bg);
+    background-image: radial-gradient(ellipse at 20% 50%, rgba(181,121,27,0.05) 0%, transparent 50%);
+  }
+  ::-webkit-scrollbar { width: 6px; }
+  ::-webkit-scrollbar-track { background: transparent; }
+  ::-webkit-scrollbar-thumb { background: var(--color-border); border-radius: var(--radius-full); }
+
+  pre, code { white-space: pre-wrap; word-break: break-word; overflow-x: hidden; }
+  .translation-code::-webkit-scrollbar, pre::-webkit-scrollbar { display: none; }
+
+  .code-keyword  { color: #CBA6F7; }
+  .code-string   { color: #A6E3A1; }
+  .code-function { color: #89B4FA; }
+  .code-comment  { color: #6C7086; }
+  .code-number   { color: #FAB387; }
+  .code-property { color: #F9E2AF; }
+  .code-operator { color: #94E2D5; }
+  .code-class    { color: #F9E2AF; }
+  .code-line     { display: block; }
+
+  /* ── NAV ── */
+  .nav {
+    position: fixed; top: 0; left: 0; right: 0;
+    height: var(--nav-height); z-index: 1000;
+    background: rgba(250,247,242,0.92); backdrop-filter: blur(8px);
+    border-bottom: 1px solid var(--color-border-light);
+  }
+  .progress-bar { position: absolute; bottom: 0; left: 0; height: 2px; width: 0%; background: var(--color-accent); transition: width 100ms linear; }
+  .nav-inner { max-width: var(--content-width-wide); margin: 0 auto; padding: 0 var(--space-6); height: 100%; display: flex; align-items: center; justify-content: space-between; gap: var(--space-4); }
+  .nav-title { font-family: var(--font-display); font-size: var(--text-sm); font-weight: 600; color: var(--color-text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 360px; }
+  .nav-dots { display: flex; align-items: center; gap: var(--space-2); }
+  .nav-dot { width: 10px; height: 10px; border-radius: 50%; border: 2px solid var(--color-text-muted); background: transparent; cursor: pointer; transition: all var(--duration-fast); position: relative; }
+  .nav-dot::after { content: attr(data-tooltip); position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); background: var(--color-bg-code); color: #CDD6F4; font-family: var(--font-body); font-size: var(--text-xs); white-space: nowrap; padding: var(--space-1) var(--space-3); border-radius: var(--radius-sm); pointer-events: none; opacity: 0; transition: opacity var(--duration-fast); }
+  .nav-dot:hover::after { opacity: 1; }
+  .nav-dot.active { border-color: var(--color-accent); background: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-light); }
+  .nav-dot.visited { border-color: var(--color-accent-muted); background: var(--color-accent-muted); }
+
+  /* ── MODULE ── */
+  .module { min-height: 100dvh; min-height: 100vh; scroll-snap-align: start; padding: var(--space-16) var(--space-6); padding-top: calc(var(--nav-height) + var(--space-12)); }
+  .module-content { max-width: var(--content-width); margin: 0 auto; }
+  .module-header { margin-bottom: var(--space-12); }
+  .module-number { display: block; font-family: var(--font-display); font-size: var(--text-6xl); font-weight: 800; color: var(--color-accent); opacity: 0.15; line-height: 1; margin-bottom: var(--space-2); }
+  .module-title { font-family: var(--font-display); font-size: var(--text-4xl); font-weight: 700; line-height: var(--leading-tight); color: var(--color-text); }
+  .module-subtitle { margin-top: var(--space-3); font-size: var(--text-lg); color: var(--color-text-secondary); line-height: var(--leading-snug); }
+  .screen { margin-bottom: var(--space-16); }
+  .screen-heading { font-family: var(--font-display); font-size: var(--text-2xl); font-weight: 600; color: var(--color-text); margin-bottom: var(--space-6); line-height: var(--leading-snug); }
+  p { margin-bottom: var(--space-4); }
+  p:last-child { margin-bottom: 0; }
+  .lead { font-size: var(--text-lg); }
+
+  /* ── ANIMATIONS ── */
+  .animate-in { opacity: 0; transform: translateY(20px); transition: opacity var(--duration-slow) var(--ease-out), transform var(--duration-slow) var(--ease-out); }
+  .animate-in.visible { opacity: 1; transform: translateY(0); }
+  .stagger-children > .animate-in { transition-delay: calc(var(--stagger-index, 0) * var(--stagger-delay)); }
+
+  /* ── HERO ── */
+  .hero { min-height: 100vh; display: flex; flex-direction: column; justify-content: center; padding: var(--space-16) var(--space-6); max-width: var(--content-width); margin: 0 auto; }
+  .hero-eyebrow { font-family: var(--font-mono); font-size: var(--text-sm); text-transform: uppercase; letter-spacing: 0.15em; color: var(--color-accent); margin-bottom: var(--space-4); }
+  .hero-title { font-family: var(--font-display); font-size: var(--text-6xl); font-weight: 800; line-height: 1.05; margin-bottom: var(--space-6); }
+  .hero-sub { font-size: var(--text-xl); color: var(--color-text-secondary); max-width: 640px; margin-bottom: var(--space-8); }
+  .hero-meta { display: flex; gap: var(--space-6); flex-wrap: wrap; font-family: var(--font-mono); font-size: var(--text-sm); color: var(--color-text-muted); }
+  .hero-meta span { display: flex; align-items: center; gap: var(--space-2); }
+
+  /* ── TRANSLATION ── */
+  .translation-block { display: grid; grid-template-columns: 1fr 1fr; gap: 0; border-radius: var(--radius-md); overflow: hidden; box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .translation-code { background: var(--color-bg-code); color: #CDD6F4; padding: var(--space-6); font-family: var(--font-mono); font-size: var(--text-sm); line-height: 1.7; position: relative; overflow-x: hidden; }
+  .translation-english { background: var(--color-surface-warm); padding: var(--space-6); font-size: var(--text-sm); line-height: 1.7; border-left: 3px solid var(--color-accent); }
+  .translation-label { position: absolute; top: var(--space-2); right: var(--space-3); font-family: var(--font-mono); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em; opacity: 0.5; }
+  .translation-english .translation-label { position: static; display: block; margin-bottom: var(--space-3); color: var(--color-text-muted); }
+  .translation-english strong { color: var(--color-text); }
+  .file-ref { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-accent); background: var(--color-accent-light); padding: 1px 6px; border-radius: 4px; }
+
+  /* ── FLOW ANIMATION ── */
+  .flow-animation { position: relative; background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-8); box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .flow-actors { display: flex; justify-content: center; align-items: center; gap: var(--space-4); margin-bottom: var(--space-8); flex-wrap: wrap; }
+  .flow-actor { display: flex; flex-direction: column; align-items: center; gap: var(--space-2); transition: all var(--duration-normal) var(--ease-out); }
+  .flow-actor-icon { width: 54px; height: 54px; border-radius: var(--radius-md); background: var(--color-bg-warm); border: 2px solid var(--color-border); display: flex; align-items: center; justify-content: center; font-family: var(--font-display); font-size: var(--text-base); font-weight: 700; transition: all var(--duration-normal) var(--ease-out); color: var(--color-text-secondary); }
+  .flow-actor span { font-size: var(--text-xs); color: var(--color-text-secondary); font-family: var(--font-mono); text-align: center; }
+  .flow-actor.active .flow-actor-icon { border-color: var(--color-accent); background: var(--color-accent-light); box-shadow: 0 0 0 3px var(--color-accent-light), 0 0 20px rgba(181,121,27,0.18); transform: scale(1.12); color: var(--color-accent-hover); }
+  .flow-packet { width: 16px; height: 16px; border-radius: 50%; background: var(--color-accent); position: absolute; pointer-events: none; display: none; box-shadow: 0 0 8px rgba(181,121,27,0.6); z-index: 5; }
+  .flow-step-label { text-align: center; font-size: var(--text-sm); color: var(--color-text); min-height: 3em; padding: var(--space-3) var(--space-4); background: var(--color-bg-warm); border-radius: var(--radius-sm); margin-bottom: var(--space-6); line-height: var(--leading-normal); }
+  .flow-controls { display: flex; align-items: center; gap: var(--space-3); }
+  .flow-progress { margin-left: auto; font-size: var(--text-xs); color: var(--color-text-muted); font-family: var(--font-mono); }
+
+  /* ── ARCH DIAGRAM ── */
+  .arch-diagram { background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-8); box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .arch-zone { border: 1px dashed var(--color-border); border-radius: var(--radius-md); padding: var(--space-6); margin-bottom: var(--space-4); }
+  .arch-zone-label { font-family: var(--font-mono); font-size: var(--text-xs); text-transform: uppercase; letter-spacing: 0.1em; color: var(--color-text-muted); margin-bottom: var(--space-4); }
+  .arch-row { display: flex; flex-wrap: wrap; gap: var(--space-2); }
+  .arch-component { display: inline-flex; flex-direction: column; align-items: center; gap: var(--space-2); padding: var(--space-4); background: var(--color-surface-warm); border: 1px solid var(--color-border); border-radius: var(--radius-md); cursor: pointer; margin: var(--space-2); transition: all var(--duration-fast); font-size: var(--text-sm); min-width: 120px; }
+  .arch-component:hover, .arch-component.active { border-color: var(--color-accent); background: var(--color-accent-light); transform: translateY(-2px); box-shadow: var(--shadow-sm); }
+  .arch-component strong { font-family: var(--font-display); }
+  .arch-component small { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+  .arch-description { margin-top: var(--space-4); padding: var(--space-4); background: var(--color-bg-warm); border-radius: var(--radius-sm); font-size: var(--text-sm); color: var(--color-text-secondary); min-height: 2.5em; }
+
+  /* ── CALLOUT ── */
+  .callout { display: flex; gap: var(--space-4); padding: var(--space-5); border-radius: var(--radius-md); margin: var(--space-6) 0; border-left: 4px solid; }
+  .callout-accent  { background: var(--color-accent-light);  border-color: var(--color-accent); }
+  .callout-info    { background: var(--color-info-light);    border-color: var(--color-info); }
+  .callout-warning { background: var(--color-error-light);   border-color: var(--color-error); }
+  .callout-success { background: var(--color-success-light); border-color: var(--color-success); }
+  .callout-icon { font-size: 1.25rem; flex-shrink: 0; margin-top: 2px; }
+  .callout-title { display: block; font-weight: 700; margin-bottom: var(--space-1); }
+  .callout-content p { font-size: var(--text-sm); margin: 0; color: var(--color-text-secondary); }
+
+  /* ── STEP CARDS ── */
+  .step-cards { display: flex; flex-direction: column; gap: var(--space-3); margin: var(--space-6) 0; }
+  .step-card { display: flex; align-items: flex-start; gap: var(--space-4); padding: var(--space-4) var(--space-5); background: var(--color-surface); border-radius: var(--radius-md); border-left: 3px solid var(--color-accent); box-shadow: var(--shadow-sm); }
+  .step-num { width: 32px; height: 32px; border-radius: 50%; background: var(--color-accent); color: white; font-weight: 700; display: flex; align-items: center; justify-content: center; font-family: var(--font-display); flex-shrink: 0; }
+  .step-body strong { display: block; font-weight: 600; margin-bottom: var(--space-1); }
+  .step-body p { margin: 0; color: var(--color-text-secondary); font-size: var(--text-sm); }
+  .step-body .src { font-family: var(--font-mono); font-size: var(--text-xs); color: var(--color-text-muted); }
+
+  /* ── PATTERN CARDS ── */
+  .pattern-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: var(--space-4); margin: var(--space-6) 0; }
+  .pattern-card { background: var(--color-surface); border-radius: var(--radius-md); padding: var(--space-6); box-shadow: var(--shadow-sm); border-top: 3px solid var(--color-accent); transition: transform var(--duration-normal) var(--ease-out), box-shadow var(--duration-normal); }
+  .pattern-card:hover { transform: translateY(-4px); box-shadow: var(--shadow-md); }
+  .pattern-icon { font-size: 1.5rem; margin-bottom: var(--space-3); }
+  .pattern-title { font-family: var(--font-display); font-size: var(--text-base); font-weight: 700; margin-bottom: var(--space-2); }
+  .pattern-desc { font-size: var(--text-sm); color: var(--color-text-secondary); line-height: var(--leading-normal); margin: 0; }
+
+  /* ── STATE TIMELINE ── */
+  .state-track { display: flex; flex-wrap: wrap; align-items: center; gap: var(--space-2); margin: var(--space-6) 0; }
+  .state-pill { font-family: var(--font-mono); font-size: var(--text-xs); padding: var(--space-2) var(--space-3); border-radius: var(--radius-full); background: var(--color-surface); border: 1px solid var(--color-border); }
+  .state-pill.vm { background: var(--color-accent-light); border-color: var(--color-accent-muted); color: var(--color-accent-hover); font-weight: 600; }
+  .state-pill.task { background: var(--color-surface-warm); color: var(--color-text-secondary); }
+  .state-pill.done { background: var(--color-success-light); border-color: var(--color-success); color: var(--color-success); font-weight: 600; }
+  .state-arrow { color: var(--color-text-muted); }
+
+  /* ── OPS CHECK (terminal verification panel) ── */
+  .ops-check { background: var(--color-bg-code); border-radius: var(--radius-md); margin: var(--space-6) 0; box-shadow: var(--shadow-md); overflow: hidden; }
+  .ops-check-head { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-5); background: rgba(255,255,255,0.05); border-bottom: 1px solid rgba(255,255,255,0.08); }
+  .ops-check-badge { font-family: var(--font-mono); font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.12em; text-transform: uppercase; color: #1E1E2E; background: #A6E3A1; padding: 2px 8px; border-radius: 4px; flex-shrink: 0; }
+  .ops-check-title { font-size: var(--text-sm); color: #CDD6F4; font-family: var(--font-body); }
+  .ops-check-body { padding: var(--space-5); font-family: var(--font-mono); font-size: var(--text-sm); line-height: 1.75; color: #CDD6F4; }
+  .ops-check-body .prompt { color: #6C7086; user-select: none; }
+  .ops-check-body .cmd { color: #A6E3A1; }
+  .ops-check-body .out { color: #9399B2; }
+  .ops-check-body .hl { color: #F9E2AF; }
+  .ops-check-body .note { color: #89B4FA; font-style: italic; }
+
+  /* ── QUIZ ── */
+  .quiz-container { background: var(--color-surface); border-radius: var(--radius-lg); padding: var(--space-8); box-shadow: var(--shadow-md); margin: var(--space-8) 0; }
+  .quiz-question-block { margin-bottom: var(--space-8); }
+  .quiz-question-block:last-of-type { margin-bottom: 0; }
+  .quiz-question { font-family: var(--font-display); font-size: var(--text-lg); font-weight: 600; margin-bottom: var(--space-4); line-height: var(--leading-snug); }
+  .quiz-options { display: flex; flex-direction: column; gap: var(--space-2); }
+  .quiz-option { display: flex; align-items: center; gap: var(--space-3); padding: var(--space-3) var(--space-4); border: 2px solid var(--color-border); border-radius: var(--radius-sm); background: var(--color-surface); cursor: pointer; width: 100%; text-align: left; font-family: var(--font-body); font-size: var(--text-base); transition: border-color var(--duration-fast), background var(--duration-fast); }
+  .quiz-option:hover:not(:disabled) { border-color: var(--color-accent-muted); }
+  .quiz-option.selected { border-color: var(--color-accent); background: var(--color-accent-light); }
+  .quiz-option.correct  { border-color: var(--color-success); background: var(--color-success-light); }
+  .quiz-option.incorrect{ border-color: var(--color-error);   background: var(--color-error-light); }
+  .quiz-option:disabled { cursor: default; }
+  .quiz-option-radio { width: 18px; height: 18px; border-radius: 50%; border: 2px solid var(--color-border); flex-shrink: 0; transition: all var(--duration-fast); }
+  .quiz-option.selected .quiz-option-radio { border-color: var(--color-accent); background: var(--color-accent); box-shadow: inset 0 0 0 3px white; }
+  .quiz-option.correct .quiz-option-radio  { border-color: var(--color-success); background: var(--color-success); box-shadow: inset 0 0 0 3px white; }
+  .quiz-option.incorrect .quiz-option-radio{ border-color: var(--color-error);   background: var(--color-error);   box-shadow: inset 0 0 0 3px white; }
+  .quiz-feedback { max-height: 0; overflow: hidden; opacity: 0; transition: max-height var(--duration-normal), opacity var(--duration-normal); font-size: var(--text-sm); border-radius: var(--radius-sm); }
+  .quiz-feedback.show { max-height: 240px; opacity: 1; padding: var(--space-3); margin-top: var(--space-2); }
+  .quiz-feedback.success { background: var(--color-success-light); color: var(--color-success); }
+  .quiz-feedback.error   { background: var(--color-error-light);   color: var(--color-error); }
+  .quiz-feedback.warning { background: var(--color-info-light);    color: var(--color-info); }
+  .quiz-check-btn, .quiz-reset-btn { margin-top: var(--space-6); padding: var(--space-3) var(--space-6); border-radius: var(--radius-sm); font-family: var(--font-body); font-size: var(--text-sm); font-weight: 600; cursor: pointer; border: none; transition: background var(--duration-fast), transform var(--duration-fast); }
+  .quiz-check-btn { background: var(--color-accent); color: white; margin-right: var(--space-3); }
+  .quiz-check-btn:hover { background: var(--color-accent-hover); transform: translateY(-1px); }
+  .quiz-reset-btn { background: var(--color-surface); color: var(--color-text-secondary); border: 1px solid var(--color-border); }
+  .quiz-reset-btn:hover { border-color: var(--color-accent-muted); }
+
+  /* ── DND ── */
+  .dnd-container { margin: var(--space-8) 0; }
+  .dnd-chips { display: flex; flex-wrap: wrap; gap: var(--space-3); margin-bottom: var(--space-6); }
+  .dnd-chip { padding: var(--space-2) var(--space-4); background: var(--color-accent); color: white; border-radius: var(--radius-full); font-size: var(--text-sm); font-weight: 600; cursor: grab; user-select: none; transition: opacity var(--duration-fast), transform var(--duration-fast); }
+  .dnd-chip:active { cursor: grabbing; transform: scale(1.05); }
+  .dnd-chip.dragging { opacity: 0.4; }
+  .dnd-chip.placed { opacity: 0.3; pointer-events: none; }
+  .dnd-zones { display: flex; flex-direction: column; gap: var(--space-4); }
+  .dnd-zone { border: 1px solid var(--color-border); border-radius: var(--radius-md); padding: var(--space-4); background: var(--color-surface); }
+  .dnd-zone-label { font-size: var(--text-sm); color: var(--color-text-secondary); margin-bottom: var(--space-3); }
+  .dnd-zone-target { min-height: 40px; border: 2px dashed var(--color-border); border-radius: var(--radius-sm); display: flex; align-items: center; justify-content: center; font-size: var(--text-sm); color: var(--color-text-muted); transition: border-color var(--duration-fast), background var(--duration-fast); }
+  .dnd-zone-target.drag-over { border-color: var(--color-accent); background: var(--color-accent-light); }
+  .dnd-zone-target.correct-placed { border-color: var(--color-success); background: var(--color-success-light); color: var(--color-success); font-weight: 600; }
+  .dnd-zone-target.incorrect-placed{ border-color: var(--color-error); background: var(--color-error-light); }
+  .btn { padding: var(--space-2) var(--space-5); border-radius: var(--radius-sm); border: 1px solid var(--color-border); background: var(--color-surface); font-family: var(--font-body); font-size: var(--text-sm); font-weight: 600; cursor: pointer; transition: all var(--duration-fast); color: var(--color-text-secondary); }
+  .btn:hover { border-color: var(--color-accent-muted); color: var(--color-accent); }
+  .btn-primary { background: var(--color-accent); color: white; border-color: var(--color-accent); }
+  .btn-primary:hover { background: var(--color-accent-hover); border-color: var(--color-accent-hover); color: white; }
+
+  /* ── GLOSSARY ── */
+  .term { border-bottom: 1.5px dashed var(--color-accent-muted); cursor: pointer; }
+  .term:hover, .term.active { border-bottom-color: var(--color-accent); color: var(--color-accent); }
+  .term-tooltip { position: fixed; background: var(--color-bg-code); color: #CDD6F4; padding: var(--space-3) var(--space-4); border-radius: var(--radius-sm); font-size: var(--text-sm); font-family: var(--font-body); line-height: var(--leading-normal); width: max(200px, min(320px, 80vw)); box-shadow: var(--shadow-lg); pointer-events: none; opacity: 0; transition: opacity var(--duration-fast); z-index: 10000; }
+  .term-tooltip::after { content: ''; position: absolute; top: 100%; left: 50%; transform: translateX(-50%); border: 6px solid transparent; border-top-color: var(--color-bg-code); }
+  .term-tooltip.visible { opacity: 1; }
+  .term-tooltip.flip::after { top: auto; bottom: 100%; border-top-color: transparent; border-bottom-color: var(--color-bg-code); }
+
+  .footer { text-align: center; padding: var(--space-16) var(--space-6); color: var(--color-text-muted); font-size: var(--text-sm); border-top: 1px solid var(--color-border-light); }
+
+  @media (max-width: 768px) {
+    :root { --text-4xl: 1.875rem; --text-5xl: 2.25rem; --text-6xl: 3rem; }
+    .translation-block { grid-template-columns: 1fr; }
+    .translation-english { border-left: none; border-top: 3px solid var(--color-accent); }
+    .pattern-cards { grid-template-columns: 1fr 1fr; }
+  }
+  @media (max-width: 480px) {
+    :root { --text-4xl: 1.5rem; --text-5xl: 1.875rem; --text-6xl: 2.25rem; }
+    .module { padding: var(--space-8) var(--space-4); }
+    .pattern-cards { grid-template-columns: 1fr; }
+    .nav-title { max-width: 150px; }
+  }
+
+  @keyframes packetMove {
+    from { left: var(--packet-from-x); top: var(--packet-from-y); opacity: 0; }
+    20%  { opacity: 1; }
+    80%  { opacity: 1; }
+    to   { left: var(--packet-to-x); top: var(--packet-to-y); opacity: 0; }
+  }
+  </style>
+</head>
+<body>
+
+  <nav class="nav" id="nav">
+    <div class="progress-bar" id="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+    <div class="nav-inner">
+      <span class="nav-title">GPU &amp; PCI Devices</span>
+      <div class="nav-dots" id="nav-dots" role="tablist">
+        <button class="nav-dot" data-target="hero" data-tooltip="Start" role="tab" aria-label="Start"></button>
+        <button class="nav-dot" data-target="module-0" data-tooltip="The Cast & Four Models" role="tab" aria-label="Module 0"></button>
+        <button class="nav-dot" data-target="module-1" data-tooltip="Config & Request Parsing" role="tab" aria-label="Module 1"></button>
+        <button class="nav-dot" data-target="module-2" data-tooltip="PCI-in-Placement" role="tab" aria-label="Module 2"></button>
+        <button class="nav-dot" data-target="module-3" data-tooltip="Scheduling & NUMA" role="tab" aria-label="Module 3"></button>
+        <button class="nav-dot" data-target="module-4" data-tooltip="The Claim" role="tab" aria-label="Module 4"></button>
+        <button class="nav-dot" data-target="module-5" data-tooltip="libvirt hostdev" role="tab" aria-label="Module 5"></button>
+        <button class="nav-dot" data-target="module-6" data-tooltip="vGPU & Cyborg" role="tab" aria-label="Module 6"></button>
+        <button class="nav-dot" data-target="module-7" data-tooltip="The Full Journey" role="tab" aria-label="Module 7"></button>
+        <button class="nav-dot" data-target="module-8" data-tooltip="When It Goes Wrong" role="tab" aria-label="Module 8"></button>
+        <button class="nav-dot" data-target="module-9" data-tooltip="Check Yourself" role="tab" aria-label="Module 9"></button>
+      </div>
+    </div>
+  </nav>
+
+  <main id="main">
+
+  <!-- ════════════ HERO ════════════ -->
+  <section class="module" id="hero" style="background: var(--color-bg);">
+    <div class="hero">
+      <div class="hero-eyebrow animate-in">OpenStack Nova · GPU &amp; PCI Message Flow</div>
+      <h1 class="hero-title animate-in">How does a GPU get<br>into your virtual machine?</h1>
+      <p class="hero-sub animate-in">You add one line to a flavor — <code>pci_passthrough:alias=GPU:1</code> — and Nova reaches across six services to hand a real piece of hardware to a guest. There are four distinct ways this can happen. This is the complete journey, traced from the real Nova source on branch <code>nectar/2024.1</code>.</p>
+      <div class="hero-meta animate-in">
+        <span>⏱️ ~16 min read</span>
+        <span>🧩 6 services</span>
+        <span>🎮 4 device models</span>
+        <span>🔎 an ops check at every step</span>
+        <span>🖱️ Interactive</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 0 — CAST & FOUR MODELS ════════════ -->
+  <section class="module" id="module-0" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">00</span>
+        <h1 class="module-title">The cast of characters</h1>
+        <p class="module-subtitle">Before any code, the single most important thing to grasp: there are <strong>four different ways</strong> a device reaches a guest, and they share parts of the pipeline but are not the same path. Get these straight and nothing later will confuse you.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Four models, one pipeline</h2>
+          <p>All four start with a request and end with a device in the guest, but each takes a different route through Nova. Keep this map in mind as you read.</p>
+          <div class="pattern-cards stagger-children">
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">🔌</div>
+              <div class="pattern-title">1. Legacy PCI alias flow</div>
+              <p class="pattern-desc">The classic path. A flavor's <span class="term" data-definition="An extra spec on a flavor, e.g. pci_passthrough:alias=GPU:1, naming a configured PCI alias and a count.">pci_passthrough:alias</span> turns into <span class="term" data-definition="An object describing a request for N PCI devices matching a spec. source is FLAVOR_ALIAS or NEUTRON_PORT.">InstancePCIRequest</span>s, matched against per-host <span class="term" data-definition="A per-host summary of available PCI devices, grouped into pools keyed by product_id, vendor_id, numa_node and dev_type.">PciDeviceStats</span> pools — no Placement involved.</p>
+            </div>
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">📊</div>
+              <div class="pattern-title">2. PCI-in-Placement</div>
+              <p class="pattern-desc">New in 2024.1 (opt-in). The same alias flow, but each device is also modelled as a Placement <span class="term" data-definition="A resource provider in Placement that advertises inventory (here, PCI devices) under a resource class such as CUSTOM_PCI_10de_1eb8.">resource provider</span> with a <span class="term" data-definition="A named unit of inventory in Placement, e.g. CUSTOM_PCI_VENDOR_PRODUCT or VGPU.">resource class</span>. Placement returns a device→RP mapping the filter then honours.</p>
+            </div>
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">🎮</div>
+              <div class="pattern-title">3. vGPU / mdev</div>
+              <p class="pattern-desc">For NVIDIA/Intel virtual GPUs. The host slices a physical GPU into <span class="term" data-definition="A mediated device: a software-defined slice of a physical device (e.g. a vGPU), identified by a UUID and exposed to the guest as vfio-pci.">mdev</span> devices reported under the <code>VGPU</code> resource class. libvirt gets a <code>&lt;hostdev type=mdev&gt;</code> identified by UUID, not a PCI address.</p>
+            </div>
+            <div class="pattern-card animate-in">
+              <div class="pattern-icon">🤖</div>
+              <div class="pattern-title">4. Cyborg accelerators</div>
+              <p class="pattern-desc">For <code>accel:device_profile</code>. A separate OpenStack service, Cyborg, owns the device. Nova creates and binds <span class="term" data-definition="Accelerator Request — a Cyborg object representing a bound device. Its attach_handle_info carries the PCI address Nova passes to libvirt.">ARQ</span>s, then reads back a PCI address to pass through as a normal hostdev.</p>
+            </div>
+          </div>
+          <div class="callout callout-accent">
+            <div class="callout-icon">🧭</div>
+            <div class="callout-content">
+              <span class="callout-title">The mental model</span>
+              <p>Models 1 and 2 are the <em>same request path</em> with Placement bolted on. Model 3 (vGPU) and model 4 (Cyborg) branch off at spawn time into their own device-creation logic. Watch which one a screen is describing.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Meet the services (click each one)</h2>
+          <p>These are the components a GPU/PCI request passes through. Click any box to learn its job.</p>
+          <div class="arch-diagram">
+            <div class="arch-zone">
+              <div class="arch-zone-label">Nova services — they speak RPC to each other</div>
+              <div class="arch-row">
+                <div class="arch-component active" data-desc="The front door. Parses the flavor's pci_passthrough:alias extra spec into InstancePCIRequests and merges SR-IOV port requests from Neutron, storing them on the instance and the RequestSpec. See nova/compute/api.py around L892 and L1118.">
+                  <strong>nova-api</strong><small>request parsing</small>
+                </div>
+                <div class="arch-component" data-desc="The orchestrator. For Cyborg device profiles it builds Placement request groups and creates/binds ARQs before handing the build off to compute. See nova/conductor/manager.py.">
+                  <strong>nova-conductor</strong><small>orchestrator</small>
+                </div>
+                <div class="arch-component" data-desc="The matchmaker. Runs the PciPassthroughFilter (keeps hosts whose pci_stats can support_requests) and the NUMATopologyFilter (enforces NUMA affinity). See nova/scheduler/filters/.">
+                  <strong>nova-scheduler</strong><small>filters</small>
+                </div>
+                <div class="arch-component" data-desc="The worker on the hypervisor. Its resource tracker claims concrete PciDevice objects, it waits for Cyborg ARQ-bound events, and it drives the libvirt driver to build the guest with the device attached.">
+                  <strong>nova-compute</strong><small>the worker</small>
+                </div>
+                <div class="arch-component" data-desc="The per-host PCI bookkeeper inside nova-compute: PciDevTracker (nova/pci/manager.py) and PciDeviceStats (nova/pci/stats.py). It tracks PciDevice objects in pools and claims/allocates/frees them.">
+                  <strong>PCI tracker</strong><small>device pools</small>
+                </div>
+                <div class="arch-component" data-desc="The libvirt driver (nova/virt/libvirt/driver.py + config.py). Turns claimed PciDevice addresses, mdev UUIDs and ARQ attach handles into guest <hostdev> XML that VFIO passes to QEMU.">
+                  <strong>libvirt driver</strong><small>guest XML</small>
+                </div>
+              </div>
+            </div>
+            <div class="arch-zone">
+              <div class="arch-zone-label">Other OpenStack projects — Nova calls them over REST</div>
+              <div class="arch-row">
+                <div class="arch-component" data-desc="The resource accountant. In PCI-in-Placement mode, PCI devices become resource providers with CUSTOM_PCI_* / VGPU inventory. The scheduler queries allocation_candidates and gets a device->RP provider mapping.">
+                  <strong>Placement</strong><small>resource accounting</small>
+                </div>
+                <div class="arch-component" data-desc="The accelerator service (nova/accelerator/cyborg.py). It owns accelerator devices. Nova creates, binds and deletes ARQs over REST and reads back the PCI attach handle for libvirt.">
+                  <strong>Cyborg</strong><small>accelerators</small>
+                </div>
+                <div class="arch-component" data-desc="Networking. For SR-IOV, Neutron supplies port-based InstancePCIRequests (VNIC types direct / direct-physical / vdpa) via network_api.create_resource_requests.">
+                  <strong>Neutron</strong><small>SR-IOV ports</small>
+                </div>
+              </div>
+            </div>
+            <div class="arch-description">nova-api — the front door. Parses the flavor's pci_passthrough:alias extra spec into InstancePCIRequests and merges SR-IOV port requests from Neutron, storing them on the instance and the RequestSpec.</div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The journey in one breath</h2>
+          <p>Here is the legacy/Placement path compressed into four phases. The vGPU and Cyborg branches join in at scheduling and spawn. The rest of the course unpacks each one.</p>
+          <div class="step-cards stagger-children">
+            <div class="step-card animate-in"><div class="step-num">1</div><div class="step-body"><strong>API parses the request</strong><p>nova-api turns the flavor alias (and any SR-IOV ports) into InstancePCIRequest objects and stores them on the instance and RequestSpec.</p></div></div>
+            <div class="step-card animate-in"><div class="step-num">2</div><div class="step-body"><strong>Scheduler filters hosts</strong><p>The PciPassthroughFilter keeps only hosts whose PCI pools can satisfy the request; the NUMATopologyFilter enforces device locality.</p></div></div>
+            <div class="step-card animate-in"><div class="step-num">3</div><div class="step-body"><strong>Compute claims the device</strong><p>The PCI tracker picks concrete PciDevice objects from its pools, marks them CLAIMED, then ALLOCATED once the build succeeds.</p></div></div>
+            <div class="step-card animate-in"><div class="step-num">4</div><div class="step-body"><strong>libvirt attaches it</strong><p>The driver turns each device's PCI address (or mdev UUID, or ARQ attach handle) into a &lt;hostdev&gt; element in the guest XML.</p></div></div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 1 — CONFIG & REQUEST PARSING ════════════ -->
+  <section class="module" id="module-1" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">01</span>
+        <h1 class="module-title">Config &amp; request parsing</h1>
+        <p class="module-subtitle">The legacy alias flow. The operator whitelists assignable devices in <span class="file-ref">nova/pci/whitelist.py</span> and defines named aliases; nova-api translates the flavor's alias into requests.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">device_spec: what is even assignable?</h2>
+          <p>The operator whitelists assignable devices with <code>[pci]device_spec</code> (the legacy name was <code>passthrough_whitelist</code>). Each JSON entry becomes a <span class="term" data-definition="One parsed [pci]device_spec entry. It carries tags such as physical_network, resource_class, traits, remote_managed and dev_type, and matches a reported host device by address/vendor/product.">PciDeviceSpec</span>. A host device is only usable if it matches at least one spec.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">nova/pci/whitelist.py</span><br>
+<span class="code-keyword">def</span> <span class="code-function">device_assignable</span>(<span class="code-keyword">self</span>, dev: ty.Dict[str, ty.Any]) -&gt; bool:<br>&nbsp;&nbsp;<span class="code-string">"""Check if a device can be assigned to a guest.</span><br><br>
+&nbsp;&nbsp;<span class="code-string">:param dev: A dictionary describing the device properties</span><br>&nbsp;&nbsp;<span class="code-string">"""</span><br>
+&nbsp;&nbsp;<span class="code-keyword">for</span> spec <span class="code-keyword">in</span> <span class="code-keyword">self</span>.specs:<br>&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">if</span> spec.<span class="code-function">match</span>(dev):<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">return</span> <span class="code-keyword">True</span><br>
+&nbsp;&nbsp;<span class="code-keyword">return</span> <span class="code-keyword">False</span>
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Is this host device on the allow-list?"</strong> A host PCI device is only usable if it matches at least one admin-configured whitelist spec. If no whitelist is set, <em>nothing</em> is assignable — a common first-time gotcha.
+              <p style="margin-top:var(--space-3)"><span class="file-ref">nova/pci/whitelist.py</span> · around line 85</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">alias → InstancePCIRequest</h2>
+          <p><code>_get_alias_from_config()</code> validates each <code>[pci]alias</code> against <code>_ALIAS_SCHEMA</code> and ORs together aliases with the same name. <code>_translate_alias_to_requests</code> then expands <code>alias_name:count</code> into request objects, each carrying the spec, the count, the alias name and the <span class="term" data-definition="The NUMA affinity rule for the device: legacy, preferred, required or socket. Decides how strictly the device must share a NUMA node with the guest's CPUs.">numa_policy</span>.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">nova/pci/request.py</span><br>
+pci_requests.<span class="code-function">append</span>(objects.<span class="code-class">InstancePCIRequest</span>(<br>&nbsp;&nbsp;count=<span class="code-function">int</span>(count),<br>&nbsp;&nbsp;spec=spec,<br>&nbsp;&nbsp;alias_name=name,<br>&nbsp;&nbsp;numa_policy=policy,<br>&nbsp;&nbsp;request_id=uuidutils.<span class="code-function">generate_uuid</span>(),<br>))
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Build one request object per alias entry."</strong> Each flavor alias request becomes a single <code>InstancePCIRequest</code> with a unique <code>request_id</code>, a device count, and the matching device spec.
+              <p style="margin-top:var(--space-3)"><span class="file-ref">nova/pci/request.py</span> · around line 189</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Two sources, one list</h2>
+          <p><code>get_pci_requests_from_flavor()</code> reads the <code>pci_passthrough:alias</code> extra spec. But the flavor is not the only source: nova-api also calls <code>network_api.create_resource_requests</code>, which appends one SR-IOV <code>InstancePCIRequest</code> per Neutron port (<span class="term" data-definition="The kind of virtual NIC: 'direct' and 'direct-physical' are SR-IOV passthrough, 'vdpa' is a vhost-data-path accelerator. Each implies a PCI device request.">VNIC types</span> direct / direct-physical / vdpa).</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">nova/compute/api.py</span><br>
+pci_request_info = pci_request.<span class="code-function">get_pci_requests_from_flavor</span>(<br>&nbsp;&nbsp;flavor, affinity_policy=pci_numa_affinity_policy)<br>
+result = <span class="code-keyword">self</span>.network_api.<span class="code-function">create_resource_requests</span>(<br>&nbsp;&nbsp;context, requested_networks, pci_request_info,<br>&nbsp;&nbsp;affinity_policy=pci_numa_affinity_policy)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Gather PCI needs from the flavor and from the network ports."</strong> PCI requests come from two sources — the flavor alias and SR-IOV Neutron ports — and are merged into one <code>InstancePCIRequests</code> list stored on the instance and the RequestSpec.
+              <p style="margin-top:var(--space-3)"><span class="file-ref">nova/compute/api.py</span> · around line 1118</p>
+            </div>
+          </div>
+          <div class="callout callout-info">
+            <div class="callout-icon">🌐</div>
+            <div class="callout-content">
+              <span class="callout-title">SR-IOV is its own sub-case</span>
+              <p>SR-IOV ports produce <code>InstancePCIRequest</code>s with <code>source = NEUTRON_PORT</code>. They share the claim machinery with the alias flow but are treated separately in PCI-in-Placement (skipped there) and tagged with a <code>physical_network</code>.</p>
+            </div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">Did the request even form? Flavor, config and RequestSpec must agree</span></div>
+            <div class="ops-check-body">
+              <span class="note"># the two config halves that must line up with the flavor</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack flavor show $FLAVOR -c properties</span>  <span class="out">→ pci_passthrough:alias='<span class="hl">GPU:1</span>'</span><br>
+              <span class="prompt">compute$ </span><span class="cmd">grep -A5 '^\[pci\]' /etc/nova/nova.conf</span>  <span class="out">→ device_spec (whitelist) + alias '<span class="hl">GPU</span>' defined?</span><br>
+              <br>
+              <span class="note"># the parsed pci_requests are frozen into the RequestSpec (API DB, JSON blob)</span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT spec FROM nova_api.request_specs WHERE instance_uuid='$UUID' \G</span>   <span class="note"># grep for "pci_requests" and your alias name</span><br>
+              <br>
+              <span class="note"># alias in flavor but not in nova.conf on the API node → 400 at boot time;</span><br>
+              <span class="note"># empty pci_requests here means the API never translated the alias — fix config, reboot the request</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 2 — PCI-IN-PLACEMENT ════════════ -->
+  <section class="module" id="module-2" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">02</span>
+        <h1 class="module-title">PCI-in-Placement modelling</h1>
+        <p class="module-subtitle">Optional, new in 2024.1. When <code>[pci]report_in_placement</code> is on, each assignable device also becomes a Placement resource provider — so Placement can do the matching, not just per-host stats.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">When does this apply?</h2>
+          <p>This is <strong>model 2</strong>, and it only runs when the operator sets <code>[pci]report_in_placement</code>. The compute node's <code>update_provider_tree</code> reports each device: standard / SRIOV_PF devices become a parent RP, while SRIOV_VF / VDPA devices become children of their PF's RP. Every RP gets the <code>COMPUTE_MANAGED_PCI_DEVICE</code> trait. Devices tagged <code>physical_network</code> (Neutron SR-IOV) are intentionally skipped.</p>
+          <div class="callout callout-accent">
+            <div class="callout-icon">📊</div>
+            <div class="callout-content">
+              <span class="callout-title">Same request, extra accounting</span>
+              <p>The request parsing from Module 1 is unchanged. PCI-in-Placement adds a parallel <em>accounting</em> view in Placement so the scheduler gets a precise device→provider mapping instead of relying only on summarised host stats.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Resource class naming</h2>
+          <p>Each device pool advertises inventory under a resource class. <code>get_resource_class</code> uses the operator-supplied <code>resource_class</code> tag if present, otherwise it synthesises <code>CUSTOM_PCI_&lt;vendor&gt;_&lt;product&gt;</code>.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">nova/compute/pci_placement_translator.py</span><br>
+<span class="code-keyword">def</span> <span class="code-function">get_resource_class</span>(<br>&nbsp;&nbsp;requested_name: ty.Optional[str], vendor_id: str, product_id: str<br>) -&gt; str:<br>&nbsp;&nbsp;<span class="code-keyword">if</span> requested_name:<br>&nbsp;&nbsp;&nbsp;&nbsp;rc = <span class="code-function">_normalize_resource_class</span>(requested_name)<br>&nbsp;&nbsp;<span class="code-keyword">else</span>:<br>&nbsp;&nbsp;&nbsp;&nbsp;rc = <span class="code-string">f"CUSTOM_PCI_{vendor_id}_{product_id}"</span>.<span class="code-function">upper</span>()<br>&nbsp;&nbsp;<span class="code-keyword">return</span> rc
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Name the inventory after the device."</strong> Each PCI device pool advertises inventory under a custom resource class, defaulting to one derived from the vendor and product IDs (e.g. <code>CUSTOM_PCI_10DE_1EB8</code>).
+              <p style="margin-top:var(--space-3)"><span class="file-ref">nova/compute/pci_placement_translator.py</span> · around line 99</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Building the provider tree</h2>
+          <p><code>PciResourceProvider.update_provider_tree</code> creates the child RP (with a Nova-generated UUID), sets inventory <code>total</code> and <code>max_unit</code> to the device count, applies traits, and records the RP UUID back onto each <code>PciDevice.extra_info['rp_uuid']</code> so the claim can later honour the mapping.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">nova/compute/pci_placement_translator.py</span><br>
+provider_tree.<span class="code-function">update_inventory</span>(<br>&nbsp;&nbsp;<span class="code-keyword">self</span>.name,<br>&nbsp;&nbsp;{<br>&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">self</span>.resource_class: {<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">"total"</span>: <span class="code-function">len</span>(<span class="code-keyword">self</span>.devs),<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">"max_unit"</span>: <span class="code-function">len</span>(<span class="code-keyword">self</span>.devs),<br>&nbsp;&nbsp;&nbsp;&nbsp;}<br>&nbsp;&nbsp;},<br>)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Advertise exactly as many units as there are devices."</strong> The RP advertises one unit per physical device it represents, and Nova remembers which RP each <code>PciDevice</code> maps to via <code>rp_uuid</code>.
+              <p style="margin-top:var(--space-3)"><span class="file-ref">nova/compute/pci_placement_translator.py</span> · around line 246</p>
+            </div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">PCI-in-Placement visible — one RP per device, under the compute node</span></div>
+            <div class="ops-check-body">
+              <span class="note"># the device RPs hang in the compute node's tree, named &lt;host&gt;_&lt;ADDRESS&gt;</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider list --in-tree $COMPUTE_RP_UUID</span><br>
+              <span class="out">| qh2-rcc123 | qh2-rcc123_<span class="hl">0000:3B:00.0</span> | … |</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider inventory list $PCI_RP_UUID</span><br>
+              <span class="out">| <span class="hl">CUSTOM_PCI_10DE_1EB8</span> | total=1 | max_unit=1 |</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider trait list $PCI_RP_UUID</span>  <span class="out">→ COMPUTE_MANAGED_PCI_DEVICE</span><br>
+              <br>
+              <span class="note"># the tracker's own ledger, in the cell DB — one row per whitelisted device</span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT address, status, dev_type, vendor_id, product_id FROM nova.pci_devices WHERE compute_node_id=$CN_ID AND deleted=0;</span><br>
+              <br>
+              <span class="note"># no RP for a device you whitelisted → the compute never reported it: check nova-compute's</span><br>
+              <span class="note"># update_provider_tree log lines and that [pci]report_in_placement is on for that host</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 3 — SCHEDULING & NUMA ════════════ -->
+  <section class="module" id="module-3" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">03</span>
+        <h1 class="module-title">Scheduling: filtering &amp; NUMA</h1>
+        <p class="module-subtitle">The RequestSpec carries the <code>pci_requests</code>. The scheduler keeps only hosts that can actually provide the devices — and, when the guest has a NUMA topology, on the right NUMA node.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">PCI requests → Placement RequestGroups</h2>
+          <p>Only when <code>[filter_scheduler]pci_in_placement</code> is set, <code>generate_request_groups_from_pci_requests</code> turns each flavor-based request into one <code>RequestGroup</code> per requested device. (Neutron-port requests are skipped here — they are handled separately.) One group per device means VFs can be placed on different PFs.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">nova/objects/request_spec.py</span><br>
+<span class="code-keyword">for</span> i <span class="code-keyword">in</span> <span class="code-function">range</span>(pci_request.count):<br>&nbsp;&nbsp;rg = objects.<span class="code-class">RequestGroup</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;use_same_provider=<span class="code-keyword">True</span>,<br>&nbsp;&nbsp;&nbsp;&nbsp;requester_id=<span class="code-string">f"{pci_request.request_id}-{i}"</span>,<br>&nbsp;&nbsp;&nbsp;&nbsp;resources={<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">self</span>.<span class="code-function">_rc_from_request</span>(spec): <span class="code-number">1</span><br>&nbsp;&nbsp;&nbsp;&nbsp;},<br>&nbsp;&nbsp;&nbsp;&nbsp;required_traits=<span class="code-keyword">self</span>.<span class="code-function">_traits_from_request</span>(spec),<br>&nbsp;&nbsp;)<br>&nbsp;&nbsp;<span class="code-keyword">self</span>.requested_resources.<span class="code-function">append</span>(rg)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"One device, one group."</strong> A <code>count=2</code> request becomes two single-device groups, so Placement can place each device on a possibly different physical provider.
+              <p style="margin-top:var(--space-3)"><span class="file-ref">nova/objects/request_spec.py</span> · around line 572</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The PciPassthroughFilter</h2>
+          <p>For each surviving allocation candidate, the filter asks the host's <code>pci_stats</code> whether it can satisfy the requests under that candidate's RP mapping. Pass = keep the host.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">nova/scheduler/filters/pci_passthrough_filter.py</span><br>
+good_candidates = <span class="code-keyword">self</span>.<span class="code-function">filter_candidates</span>(<br>&nbsp;&nbsp;host_state,<br>&nbsp;&nbsp;<span class="code-keyword">lambda</span> candidate: host_state.pci_stats.<span class="code-function">support_requests</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;pci_requests.requests, provider_mapping=candidate[<span class="code-string">"mappings"</span>]<br>&nbsp;&nbsp;),<br>)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Can this exact host, under this exact device mapping, meet the request?"</strong> A host passes only if its summarised PCI pools — constrained to the Placement RPs in the candidate — can meet the request.
+              <p style="margin-top:var(--space-3)"><span class="file-ref">nova/scheduler/filters/pci_passthrough_filter.py</span> · around line 60</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">support_requests is a dry run</h2>
+          <p>Crucially, filtering does <em>not</em> consume anything. <code>support_requests</code> deep-copies the stats and tries <code>apply_requests</code> on the copy; success simply means "schedulable". The real consumption happens later, during the claim on the chosen host.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">nova/pci/stats.py</span><br>
+stats = copy.<span class="code-function">deepcopy</span>(<span class="code-keyword">self</span>)<br>
+<span class="code-keyword">try</span>:<br>&nbsp;&nbsp;stats.<span class="code-function">apply_requests</span>(requests, provider_mapping, numa_cells)<br>
+<span class="code-keyword">except</span> exception.<span class="code-class">PciDeviceRequestFailed</span>:<br>&nbsp;&nbsp;<span class="code-keyword">return</span> <span class="code-keyword">False</span><br>
+<span class="code-keyword">return</span> <span class="code-keyword">True</span>
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Pretend to allocate on a throwaway copy."</strong> Filtering tests feasibility on a deep copy of the pools, so the host's real pools are untouched. Real consumption happens in <code>consume_requests</code> during the claim.
+              <p style="margin-top:var(--space-3)"><span class="file-ref">nova/pci/stats.py</span> · around line 784</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">NUMA-aware fit</h2>
+          <p>PCI devices have a <span class="term" data-definition="The NUMA node a PCI device is physically attached to. For best performance a device should sit on the same node as the guest's vCPUs and memory.">numa_node</span>. When the guest has a NUMA topology, the <code>NUMATopologyFilter</code> combines CPU/memory fitting with PCI placement in one call to <code>hardware.numa_fit_instance_to_host</code>, passing the <code>pci_requests</code> and host <code>pci_stats</code> together.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">nova/scheduler/filters/numa_topology_filter.py</span><br>
+<span class="code-keyword">lambda</span> candidate: hardware.<span class="code-function">numa_fit_instance_to_host</span>(<br>&nbsp;&nbsp;...<br>&nbsp;&nbsp;pci_requests=pci_requests,<br>&nbsp;&nbsp;pci_stats=host_state.pci_stats,<br>)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Fit the CPUs and the device on the same NUMA node."</strong> NUMA fitting and PCI device locality are decided together, so a guest's vCPUs and its PCI device share a NUMA node when the policy demands it. The pool filter drops pools on the wrong node according to <code>request.numa_policy</code>.
+              <p style="margin-top:var(--space-3)"><span class="file-ref">nova/scheduler/filters/numa_topology_filter.py</span> · around line 105</p>
+            </div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">Would scheduling pass right now? Dry-run it before blaming the filter</span></div>
+            <div class="ops-check-body">
+              <span class="note"># does ANY host advertise the class with a free unit? (pci_in_placement deployments)</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack allocation candidate list --resource CUSTOM_PCI_10DE_1EB8=1</span><br>
+              <br>
+              <span class="note"># the Nectar branch logs each filter's surviving hosts at INFO — read the story per instance</span><br>
+              <span class="prompt">$ </span><span class="cmd">grep $UUID nova-scheduler.log | grep 'Filter '</span><br>
+              <span class="out">Filter <span class="hl">PciPassthroughFilter</span> returned 0 hosts …   <span class="note"># ← the culprit names itself</span></span><br>
+              <br>
+              <span class="note"># then check the candidate host's device ledger: free devices on the right NUMA node?</span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT address, status, numa_node, instance_uuid FROM nova.pci_devices WHERE compute_node_id=$CN_ID AND deleted=0;</span><br>
+              <br>
+              <span class="note"># NoValidHost with NO filter lines at all → placement returned zero candidates;</span><br>
+              <span class="note"># the inventory (module 2) is missing or fully consumed — filtering never even ran</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 4 — THE CLAIM ════════════ -->
+  <section class="module" id="module-4" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">04</span>
+        <h1 class="module-title">The resource-tracker claim</h1>
+        <p class="module-subtitle">A host was chosen. Now, on that compute node, the PCI tracker turns abstract requests into <em>concrete</em> devices and reserves them. This is where the device stops being a number and becomes a real BDF.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The claim call</h2>
+          <p>Inside <code>ResourceTracker.instance_claim</code>, while holding the host's resource semaphore, Nova hands the instance's <code>pci_requests</code> and its claimed NUMA topology to the <span class="term" data-definition="The PciDevTracker (nova/pci/manager.py): the per-host object that owns the PciDevice pools and performs claim/allocate/free.">PCI tracker</span>.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">nova/compute/resource_tracker.py</span><br>
+<span class="code-keyword">if</span> <span class="code-keyword">self</span>.pci_tracker:<br>&nbsp;&nbsp;<span class="code-keyword">self</span>.pci_tracker.<span class="code-function">claim_instance</span>(context, pci_requests,<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;instance_numa_topology)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Reserve the real devices, under the host lock."</strong> While holding the host's resource lock, Nova reserves the actual PCI devices for this instance, so two parallel builds can't grab the same device.
+              <p style="margin-top:var(--space-3)"><span class="file-ref">nova/compute/resource_tracker.py</span> · around line 201</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">consume_requests picks the devices</h2>
+          <p><code>consume_requests</code> filters the pools per request. With no Placement mapping it greedily consumes; with a mapping it follows the per-RP allocation exactly. If a request can't be met, it <em>returns</em> any partially-allocated devices to their pools and raises <span class="term" data-definition="Raised when consume_requests / apply_requests cannot find enough matching, NUMA-affined or RP-matched devices. Causes a filter to reject the host or the claim to fail.">PciDeviceRequestFailed</span>.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">nova/pci/stats.py</span><br>
+<span class="code-keyword">if</span> <span class="code-keyword">not</span> pools:<br>&nbsp;&nbsp;...<br>&nbsp;&nbsp;<span class="code-keyword">for</span> d <span class="code-keyword">in</span> <span class="code-function">range</span>(<span class="code-function">len</span>(alloc_devices)):<br>&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">self</span>.<span class="code-function">add_device</span>(alloc_devices.<span class="code-function">pop</span>())<br>&nbsp;&nbsp;<span class="code-keyword">raise</span> exception.<span class="code-class">PciDeviceRequestFailed</span>(requests=pci_requests)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"All or nothing."</strong> If a request cannot be satisfied, any devices already taken for it are returned to their pools and the claim fails cleanly — no half-allocated state is left behind.
+              <p style="margin-top:var(--space-3)"><span class="file-ref">nova/pci/stats.py</span> · around line 287</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">claim → allocate lifecycle</h2>
+          <p>Claimed devices live in <code>self.claims[uuid]</code>. Once the instance is actually built, <code>allocate_instance</code> moves them into <code>self.allocations</code> and calls <code>dev.allocate(instance)</code>. The device's status walks through a fixed lifecycle.</p>
+          <div class="state-track">
+            <span class="state-pill vm">AVAILABLE</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill task">CLAIMED</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill done">ALLOCATED</span>
+            <span class="state-arrow">→</span>
+            <span class="state-pill vm">AVAILABLE (on free)</span>
+          </div>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">nova/pci/manager.py</span><br>
+<span class="code-keyword">def</span> <span class="code-function">allocate_instance</span>(<span class="code-keyword">self</span>, instance: <span class="code-string">'objects.Instance'</span>) -&gt; <span class="code-keyword">None</span>:<br>&nbsp;&nbsp;devs = <span class="code-keyword">self</span>.claims.<span class="code-function">pop</span>(instance[<span class="code-string">'uuid'</span>], [])<br>&nbsp;&nbsp;<span class="code-keyword">self</span>.<span class="code-function">_allocate_instance</span>(instance, devs)<br>&nbsp;&nbsp;<span class="code-keyword">if</span> devs:<br>&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">self</span>.allocations[instance[<span class="code-string">'uuid'</span>]] += devs
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Promote the reservation to a permanent allocation."</strong> Once the instance is actually built, its claimed PCI devices become permanently allocated to it. On delete, <code>free_instance</code> returns the devices to their pools and they go back to <code>AVAILABLE</code>.
+              <p style="margin-top:var(--space-3)"><span class="file-ref">nova/pci/manager.py</span> · around line 346</p>
+            </div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">Watch a device change hands — the pci_devices row is the truth</span></div>
+            <div class="ops-check-body">
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT address, status, instance_uuid FROM nova.pci_devices WHERE compute_node_id=$CN_ID AND deleted=0;</span><br>
+              <span class="out">| 0000:3B:00.0 | <span class="hl">allocated</span> | $UUID |   <span class="note"># available → claimed → allocated as the build lands</span></span><br>
+              <br>
+              <span class="note"># the same walk, from the instance's side</span><br>
+              <span class="prompt">mysql&gt; </span><span class="cmd">SELECT address, status FROM nova.pci_devices WHERE instance_uuid='$UUID' AND deleted=0;</span><br>
+              <br>
+              <span class="note"># device parked at 'claimed' but the boot failed long ago → the claim was never rolled back;</span><br>
+              <span class="note"># nova-compute's update_available_resource periodic reconciles it on its next pass —</span><br>
+              <span class="note"># if it doesn't, restart nova-compute on that host and re-check before touching the DB</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 5 — LIBVIRT HOSTDEV ════════════ -->
+  <section class="module" id="module-5" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">05</span>
+        <h1 class="module-title">libvirt: the hostdev</h1>
+        <p class="module-subtitle">The device is claimed. Now the libvirt driver turns its PCI address into a <span class="term" data-definition="A libvirt guest XML element that passes a host device straight through to the guest. For PCI passthrough it carries the device's BDF; VFIO hands it to QEMU.">&lt;hostdev&gt;</span> element — the actual instruction QEMU and VFIO use to pass the hardware through.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">address → hostdev</h2>
+          <p>The driver iterates <code>instance.get_pci_devices(source=FLAVOR_ALIAS)</code>. For each one, <code>_get_guest_pci_device</code> parses the stored <span class="term" data-definition="Bus:Device.Function — the PCI address that identifies a device on the host, e.g. 0000:3b:00.0 (domain:bus:slot.function).">BDF</span> string into a 4-tuple via <code>pci_utils.parse_address</code> and builds the hostdev config.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">nova/virt/libvirt/driver.py</span><br>
+<span class="code-keyword">def</span> <span class="code-function">_get_guest_pci_device</span>(<span class="code-keyword">self</span>, pci_device):<br>&nbsp;&nbsp;dbsf = pci_utils.<span class="code-function">parse_address</span>(pci_device.address)<br>&nbsp;&nbsp;dev = vconfig.<span class="code-class">LibvirtConfigGuestHostdevPCI</span>()<br>&nbsp;&nbsp;dev.domain, dev.bus, dev.slot, dev.function = dbsf<br>&nbsp;&nbsp;<span class="code-keyword">self</span>.<span class="code-function">_set_managed_mode</span>(dev)<br>&nbsp;&nbsp;<span class="code-keyword">return</span> dev
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Turn the device's address into a passthrough element."</strong> Each allocated PCI device becomes a <code>&lt;hostdev type=pci&gt;</code> element carrying its exact PCI address (domain, bus, slot, function).
+              <p style="margin-top:var(--space-3)"><span class="file-ref">nova/virt/libvirt/driver.py</span> · around line 6012</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The XML</h2>
+          <p><code>LibvirtConfigGuestHostdevPCI.format_dom</code> emits the <code>&lt;address&gt;</code> source element, ensuring each of domain / bus / slot / function is <code>0x</code>-prefixed hexadecimal — the form libvirt and QEMU expect.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">nova/virt/libvirt/config.py</span><br>
+<span class="code-keyword">def</span> <span class="code-function">format_dom</span>(<span class="code-keyword">self</span>):<br>&nbsp;&nbsp;dev = <span class="code-function">super</span>(<span class="code-class">LibvirtConfigGuestHostdevPCI</span>, <span class="code-keyword">self</span>).<span class="code-function">format_dom</span>()<br>&nbsp;&nbsp;address = etree.<span class="code-class">Element</span>(<br>&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-string">"address"</span>,<br>&nbsp;&nbsp;&nbsp;&nbsp;domain=<span class="code-keyword">self</span>.domain <span class="code-keyword">if</span> <span class="code-keyword">self</span>.domain.<span class="code-function">startswith</span>(<span class="code-string">'0x'</span>)<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;<span class="code-keyword">else</span> <span class="code-string">'0x'</span> + <span class="code-keyword">self</span>.domain,<br>&nbsp;&nbsp;&nbsp;&nbsp;bus=<span class="code-keyword">self</span>.bus <span class="code-keyword">if</span> <span class="code-keyword">self</span>.bus.<span class="code-function">startswith</span>(<span class="code-string">'0x'</span>) <span class="code-keyword">else</span> <span class="code-string">'0x'</span> + <span class="code-keyword">self</span>.bus,<br>&nbsp;&nbsp;&nbsp;&nbsp;...
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Write the address libvirt will pass through."</strong> The guest XML now contains the physical PCI address that libvirt and QEMU will hand to the guest using VFIO.
+              <p style="margin-top:var(--space-3)"><span class="file-ref">nova/virt/libvirt/config.py</span> · around line 2382</p>
+            </div>
+          </div>
+          <div class="callout callout-success">
+            <div class="callout-icon">🎉</div>
+            <div class="callout-content">
+              <span class="callout-title">That's a passed-through GPU</span>
+              <p>For models 1 and 2 the story ends here: the guest boots with the real device on its PCI bus. The next module covers the two paths that <em>don't</em> use a plain PCI address — vGPU and Cyborg.</p>
+            </div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">Prove the guest really has the device</span></div>
+            <div class="ops-check-body">
+              <span class="note"># the hostdev element in the running domain carries the exact BDF</span><br>
+              <span class="prompt">compute$ </span><span class="cmd">virsh dumpxml instance-000xxxxx | grep -A4 'hostdev'</span><br>
+              <span class="out">&lt;address domain='0x0000' bus='<span class="hl">0x3b</span>' slot='0x00' function='0x0'/&gt;</span><br>
+              <br>
+              <span class="note"># on the host, the device must be bound to vfio-pci, not the vendor driver</span><br>
+              <span class="prompt">compute$ </span><span class="cmd">lspci -k -s 3b:00.0</span>  <span class="out">→ Kernel driver in use: <span class="hl">vfio-pci</span></span><br>
+              <br>
+              <span class="note"># PCI-in-Placement: the instance allocation includes the device line</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider allocation show $UUID</span>  <span class="out">→ …, 'CUSTOM_PCI_10DE_1EB8': 1</span><br>
+              <span class="note"># inside the guest: lspci | grep -i nvidia</span>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 6 — vGPU & CYBORG ════════════ -->
+  <section class="module" id="module-6" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">06</span>
+        <h1 class="module-title">The two other paths: vGPU &amp; Cyborg</h1>
+        <p class="module-subtitle">Models 3 and 4. Both end at a <code>&lt;hostdev&gt;</code>, but they reach it differently: vGPU through mediated devices and a UUID, Cyborg through a separate REST service and an ARQ.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">vGPU / mdev — slicing a GPU</h2>
+          <p>Operators set <code>[devices]enabled_mdev_types</code> (deprecated alias <code>enabled_vgpu_types</code>) plus per-type <code>[mdev_&lt;type&gt;]</code> sections. vGPUs report to Placement under the <code>VGPU</code> resource class on per-pGPU child RPs. At spawn, <code>_vgpu_allocations</code> filters the instance's allocations to mdev classes, <code>_allocate_mdevs</code> reuses an unassigned mdev or creates one, and <code>_guest_add_mdevs</code> adds the device by UUID.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">nova/virt/libvirt/driver.py</span><br>
+<span class="code-keyword">def</span> <span class="code-function">_guest_add_mdevs</span>(<span class="code-keyword">self</span>, guest, chosen_mdevs):<br>&nbsp;&nbsp;<span class="code-keyword">for</span> chosen_mdev <span class="code-keyword">in</span> chosen_mdevs:<br>&nbsp;&nbsp;&nbsp;&nbsp;mdev = vconfig.<span class="code-class">LibvirtConfigGuestHostdevMDEV</span>()<br>&nbsp;&nbsp;&nbsp;&nbsp;mdev.uuid = chosen_mdev<br>&nbsp;&nbsp;&nbsp;&nbsp;guest.<span class="code-function">add_device</span>(mdev)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Plug the mediated device in by its UUID."</strong> Each Placement <code>VGPU</code> allocation maps to a concrete <span class="term" data-definition="A mediated device — a software slice of a physical GPU. In the guest XML it appears as <hostdev type=mdev>, model vfio-pci, identified by a UUID rather than a PCI address.">mdev</span> that is plugged into the guest as a <code>&lt;hostdev type=mdev&gt;</code> identified by UUID, not a PCI address.
+              <p style="margin-top:var(--space-3)"><span class="file-ref">nova/virt/libvirt/driver.py</span> · around line 7536</p>
+            </div>
+          </div>
+          <div class="callout callout-info">
+            <div class="callout-icon">🎮</div>
+            <div class="callout-content">
+              <span class="callout-title">Why vGPU is different</span>
+              <p>A vGPU isn't a whole PCI device — it's a mediated slice. So there is no BDF to pass through; libvirt is given an mdev <em>UUID</em> and the model <code>vfio-pci</code> instead.</p>
+            </div>
+          </div>
+          <div class="ops-check">
+            <div class="ops-check-head"><span class="ops-check-badge">Ops check</span><span class="ops-check-title">vGPU — count the slices at every layer</span></div>
+            <div class="ops-check-body">
+              <span class="note"># placement: VGPU inventory per pGPU child RP, and what's consumed</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider list --in-tree $COMPUTE_RP_UUID | grep -i pgpu</span><br>
+              <span class="prompt">$ </span><span class="cmd">openstack resource provider usage show $PGPU_RP_UUID</span>  <span class="out">→ VGPU used/total</span><br>
+              <br>
+              <span class="note"># the host: which mdevs exist, and which are attached to guests</span><br>
+              <span class="prompt">compute$ </span><span class="cmd">virsh nodedev-list --cap mdev</span><br>
+              <span class="prompt">compute$ </span><span class="cmd">mdevctl list</span>  <span class="out">→ uuid, parent pGPU, type (e.g. nvidia-233)</span><br>
+              <br>
+              <span class="note"># guest XML: hostdev type='mdev' with the UUID, not a BDF</span><br>
+              <span class="prompt">compute$ </span><span class="cmd">virsh dumpxml instance-000xxxxx | grep -B2 -A3 mdev</span><br>
+              <br>
+              <span class="note"># placement says free but boots fail with no candidates → enabled_mdev_types /</span><br>
+              <span class="note"># [mdev_&lt;type&gt;] config drifted from what the driver actually created; compare mdevctl to nova.conf</span>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Cyborg — device profile → request groups</h2>
+          <p>For <code>accel:device_profile=&lt;name&gt;</code>, the conductor calls <code>cyborg.get_device_profile_request_groups</code> to turn the profile into Placement RequestGroups before scheduling.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">nova/accelerator/cyborg.py</span><br>
+<span class="code-keyword">def</span> <span class="code-function">get_device_profile_request_groups</span>(context, dp_name, owner=<span class="code-keyword">None</span>):<br>&nbsp;&nbsp;cyclient = <span class="code-function">get_client</span>(context)<br>&nbsp;&nbsp;dp_groups = cyclient.<span class="code-function">get_device_profile_groups</span>(dp_name)<br>&nbsp;&nbsp;<span class="code-keyword">return</span> cyclient.<span class="code-function">get_device_request_groups</span>(dp_groups, owner)
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Ask Cyborg what to request in Placement."</strong> The Cyborg device profile drives the resource and trait requests, so the scheduler can find a host with a matching accelerator.
+              <p style="margin-top:var(--space-3)"><span class="file-ref">nova/accelerator/cyborg.py</span> · around line 90</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Cyborg — ARQ attach handle → hostdev</h2>
+          <p>After scheduling, the conductor calls <code>create_arqs_and_match_resource_providers</code> (POST) and <code>bind_arqs</code> (PATCH). Compute waits for <code>accelerator-request-bound</code> events, reads the resolved ARQs via <code>get_arqs_for_instance</code>, and passes <code>accel_info</code> to <code>driver.spawn</code>. The bound ARQ's <span class="term" data-definition="The field on a bound Cyborg ARQ that carries the resolved device location. For a PCI accelerator it is the PCI address (domain/bus/device/function).">attach_handle_info</span> PCI address becomes a hostdev.</p>
+          <div class="translation-block">
+            <div class="translation-code">
+              <span class="translation-label">nova/virt/libvirt/driver.py</span><br>
+<span class="code-keyword">def</span> <span class="code-function">_guest_add_accel_pci_devices</span>(<span class="code-keyword">self</span>, guest, accel_info):<br>&nbsp;&nbsp;<span class="code-keyword">for</span> arq <span class="code-keyword">in</span> accel_info:<br>&nbsp;&nbsp;&nbsp;&nbsp;dev = vconfig.<span class="code-class">LibvirtConfigGuestHostdevPCI</span>()<br>&nbsp;&nbsp;&nbsp;&nbsp;pci_addr = arq[<span class="code-string">'attach_handle_info'</span>]<br>&nbsp;&nbsp;&nbsp;&nbsp;dev.domain, dev.bus, dev.slot, dev.function = (<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pci_addr[<span class="code-string">'domain'</span>], pci_addr[<span class="code-string">'bus'</span>],<br>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;pci_addr[<span class="code-string">'device'</span>], pci_addr[<span class="code-string">'function'</span>])
+            </div>
+            <div class="translation-english">
+              <span class="translation-label">In plain English</span>
+              <strong>"Use the address Cyborg hands back."</strong> A Cyborg-bound accelerator becomes a normal PCI passthrough hostdev in the guest, using the address Cyborg returns in the ARQ — not the flavor or the device_spec whitelist.
+              <p style="margin-top:var(--space-3)"><span class="file-ref">nova/virt/libvirt/driver.py</span> · around line 7598</p>
+            </div>
+          </div>
+          <div class="callout callout-accent">
+            <div class="callout-icon">🤖</div>
+            <div class="callout-content">
+              <span class="callout-title">Cyborg owns the device, Nova just plugs it in</span>
+              <p>Unlike models 1–3, Nova does not own the device here. Cyborg does. Nova asks for it (ARQ), binds it, reads back where it landed, and passes it through. On delete, <code>delete_arqs_if_needed</code> calls <code>delete_arqs_for_instance</code> (DELETE) to give it back.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 7 — FULL JOURNEY ════════════ -->
+  <section class="module" id="module-7" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">07</span>
+        <h1 class="module-title">The full journey, animated</h1>
+        <p class="module-subtitle">Press <strong>Next step</strong> to watch a request travel the entire path. Watch the labels for <strong>CAST</strong>, <strong>CALL</strong>, <strong>REST</strong> and <strong>LIBRARY</strong> — and notice where the vGPU and Cyborg branches join in.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <div class="flow-animation" id="gpu-flow" data-steps='[
+            {"highlight":"api","label":"1. [CAST] You boot a server with flavor pci_passthrough:alias=GPU:1 (or accel:device_profile). nova-api receives it."},
+            {"highlight":"api","label":"2. [CALL] get_pci_requests_from_flavor() parses the alias into InstancePCIRequest(s) — nova/pci/request.py."},
+            {"from":"api","to":"neutron","packet":true,"highlight":"neutron","label":"3. [REST] SR-IOV ports add port-based InstancePCIRequests via create_resource_requests."},
+            {"highlight":"api","label":"4. [CALL] RequestSpec gets pci_requests; generate_request_groups_from_pci_requests builds RequestGroups if pci_in_placement."},
+            {"from":"conductor","to":"cyborg","packet":true,"highlight":"cyborg","label":"5. [REST] For accel:device_profile, get_device_profile_request_groups adds accelerator RequestGroups."},
+            {"from":"scheduler","to":"placement","packet":true,"highlight":"placement","label":"6. [REST] allocation_candidates query returns hosts/RPs (CUSTOM_PCI_* / VGPU) and provider mappings."},
+            {"highlight":"scheduler","label":"7. [CALL] PciPassthroughFilter keeps candidates where pci_stats.support_requests passes."},
+            {"highlight":"scheduler","label":"8. [CALL] NUMATopologyFilter runs numa_fit_instance_to_host with pci_requests + pci_stats."},
+            {"highlight":"scheduler","label":"9. [CALL] support_requests dry-runs apply_requests on a deep copy of the pools — nothing is consumed yet."},
+            {"from":"conductor","to":"cyborg","packet":true,"highlight":"cyborg","label":"10. [REST] create_arqs_and_match_resource_providers (POST /accelerator_requests) then bind_arqs (PATCH)."},
+            {"from":"conductor","to":"compute","packet":true,"highlight":"compute","label":"11. [CAST] conductor casts the build (with accel_uuids) to the chosen nova-compute host."},
+            {"from":"compute","to":"pcitracker","packet":true,"highlight":"pcitracker","label":"12. [CALL] ResourceTracker.instance_claim -> PciDevTracker.claim_instance."},
+            {"highlight":"pcitracker","label":"13. [CALL] consume_requests filters pools, allocates concrete PciDevice objects, marks them CLAIMED."},
+            {"from":"compute","to":"cyborg","packet":true,"highlight":"cyborg","label":"14. [REST] Wait for accelerator-request-bound, then get_arqs_for_instance returns attach_handle_info."},
+            {"from":"compute","to":"libvirt","packet":true,"highlight":"libvirt","label":"15. [CALL] driver.spawn builds the guest config from instance.pci_devices and accel_info."},
+            {"highlight":"libvirt","label":"16. [CALL] _get_guest_pci_device -> parse_address -> LibvirtConfigGuestHostdevPCI."},
+            {"highlight":"libvirt","label":"17. [LIBRARY] _allocate_mdevs / _guest_add_mdevs add <hostdev type=mdev> for vGPU (by UUID)."},
+            {"highlight":"libvirt","label":"18. [CALL] format_dom emits the <hostdev> XML with 0x-prefixed BDF (or mdev UUID)."},
+            {"highlight":"libvirt","label":"19. [LIBRARY] Domain defined and started; VFIO passes the device through to the QEMU guest."},
+            {"from":"libvirt","to":"pcitracker","packet":true,"highlight":"pcitracker","label":"20. [CALL] On success allocate_instance flips the devices CLAIMED -> ALLOCATED."},
+            {"from":"compute","to":"placement","packet":true,"highlight":"placement","label":"21. [REST] The instance allocation against PCI/VGPU RPs is held (or healed via reshape)."},
+            {"highlight":"compute","label":"22. [CALL] instance.pci_devices persisted; ARQs bound to the instance. The GPU is in the guest. 🎉"},
+            {"from":"compute","to":"cyborg","packet":true,"highlight":"cyborg","label":"23. [REST] On delete, delete_arqs_if_needed -> delete_arqs_for_instance (DELETE)."},
+            {"from":"compute","to":"pcitracker","packet":true,"highlight":"pcitracker","label":"24. [CALL] On delete, free_instance returns the devices to their pools (back to AVAILABLE)."}
+          ]'>
+            <div class="flow-actors">
+              <div class="flow-actor active" id="flow-api"><div class="flow-actor-icon">API</div><span>nova-api</span></div>
+              <div class="flow-actor" id="flow-conductor"><div class="flow-actor-icon">CO</div><span>conductor</span></div>
+              <div class="flow-actor" id="flow-scheduler"><div class="flow-actor-icon">SC</div><span>scheduler</span></div>
+              <div class="flow-actor" id="flow-compute"><div class="flow-actor-icon">CM</div><span>compute</span></div>
+              <div class="flow-actor" id="flow-placement"><div class="flow-actor-icon">PL</div><span>placement</span></div>
+              <div class="flow-actor" id="flow-pcitracker"><div class="flow-actor-icon">PT</div><span>PCI tracker</span></div>
+              <div class="flow-actor" id="flow-libvirt"><div class="flow-actor-icon">VM</div><span>libvirt</span></div>
+              <div class="flow-actor" id="flow-cyborg"><div class="flow-actor-icon">CY</div><span>cyborg</span></div>
+              <div class="flow-actor" id="flow-neutron"><div class="flow-actor-icon">NE</div><span>neutron</span></div>
+            </div>
+            <div class="flow-packet"></div>
+            <div class="flow-step-label">Click "Next step" to begin the journey</div>
+            <div class="flow-controls">
+              <button class="btn btn-primary flow-next-btn">Next step →</button>
+              <button class="btn flow-reset-btn">Reset</button>
+              <span class="flow-progress">Step 0 / 24</span>
+            </div>
+          </div>
+          <div class="callout callout-accent">
+            <div class="callout-icon">🔎</div>
+            <div class="callout-content">
+              <span class="callout-title">Four labels, four meanings</span>
+              <p><strong>CAST</strong> = fire-and-forget RPC on the queue. <strong>CALL</strong> = an in-process or blocking RPC call. <strong>REST</strong> = HTTP to another project (Placement, Cyborg, Neutron). <strong>LIBRARY</strong> = a local call into libvirt/VFIO. The Cyborg (CY) and vGPU (libvirt) branches only fire for those two models.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 8 — FAILURES ════════════ -->
+  <section class="module" id="module-8" style="background: var(--color-bg-warm);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">08</span>
+        <h1 class="module-title">When it goes wrong</h1>
+        <p class="module-subtitle">PCI passthrough has its own family of failures, spread across config validation, scheduling, the claim, and the Placement report.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Misconfigured aliases</h2>
+          <p>Two failures fire during request parsing, before any host is even considered.</p>
+          <div class="step-cards stagger-children">
+            <div class="step-card animate-in"><div class="step-num">!</div><div class="step-body"><strong>PciRequestAliasNotDefined</strong><p>The flavor references an alias name that does not exist in <code>[pci]alias</code>. Typo in the flavor, or alias not configured on the API node.</p><span class="src">nova/pci/request.py · L180</span></div></div>
+            <div class="step-card animate-in"><div class="step-num">!</div><div class="step-body"><strong>PciInvalidAlias</strong><p>Two same-named aliases disagree on <code>device_type</code> or <code>numa_policy</code>, or an alias fails the JSON schema.</p><span class="src">nova/pci/request.py</span></div></div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">No device that fits</h2>
+          <p>The most common runtime failure. <code>PciDeviceRequestFailed</code> is raised when <code>consume_requests</code> / <code>apply_requests</code> cannot find enough matching, NUMA-affined, or RP-matched devices.</p>
+          <div class="callout callout-warning">
+            <div class="callout-icon">🚫</div>
+            <div class="callout-content">
+              <span class="callout-title">PciDeviceRequestFailed</span>
+              <p>At <em>filter</em> time this makes <code>support_requests</code> return False and the host is rejected. At <em>claim</em> time it aborts the build on the chosen host. Same exception, two very different moments. (<span class="file-ref">nova/pci/stats.py</span> L296, L317)</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">NUMA affinity not satisfiable</h2>
+          <p>If the instance has a NUMA topology but a device with <code>numa_node is None</code> is assigned, the PCI tracker logs a warning. Under the legacy policy this is <em>not</em> fatal — but with <code>required</code> policy it becomes a hard failure during fitting.</p>
+          <div class="callout callout-info">
+            <div class="callout-icon">⚠️</div>
+            <div class="callout-content">
+              <span class="callout-title">No NUMA affinity warning</span>
+              <p>Logged from <span class="file-ref">nova/pci/manager.py</span> L318. The <code>numa_policy</code> on the request (legacy / preferred / required / socket) decides whether a missing-affinity device is tolerated or rejected.</p>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">The Placement report rejects the config</h2>
+          <p>Only in PCI-in-Placement mode. If VFs of one PF disagree on <code>resource_class</code> or <code>traits</code>, or a <code>devname</code> is used while <code>report_in_placement</code> is on, the compute node's report fails outright.</p>
+          <div class="callout callout-warning">
+            <div class="callout-icon">🧱</div>
+            <div class="callout-content">
+              <span class="callout-title">PlacementPciException / mixed RC or traits</span>
+              <p>Raised from <span class="file-ref">nova/compute/pci_placement_translator.py</span>. The fix is operator-side: make the <code>device_spec</code> entries for one PF's VFs consistent, and avoid <code>devname</code> matching in Placement mode.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <!-- ════════════ MODULE 9 — QUIZ ════════════ -->
+  <section class="module" id="module-9" style="background: var(--color-bg);">
+    <div class="module-content">
+      <header class="module-header animate-in">
+        <span class="module-number">09</span>
+        <h1 class="module-title">Check yourself</h1>
+        <p class="module-subtitle">Three questions and a matching exercise. If these click, you can tell the four models apart and trace any one of them.</p>
+      </header>
+
+      <div class="module-body">
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Quiz</h2>
+          <div class="quiz-container" id="quiz1">
+            <div class="quiz-question-block" data-correct="b"
+                 data-explanation-right="get_resource_class synthesizes CUSTOM_PCI_<vendor>_<product> (uppercased) when no name is requested — pci_placement_translator.py L99-109."
+                 data-explanation-wrong="PCI_DEVICE is not used; VGPU is only for mediated devices (vGPU/mdev), not generic PCI passthrough.">
+              <div class="quiz-question">In 2024.1 with <code>[pci]report_in_placement</code> enabled, what resource class does a device get if the operator did NOT set a <code>resource_class</code> tag?</div>
+              <div class="quiz-options">
+                <button class="quiz-option" data-value="a" onclick="selectOption(this)"><span class="quiz-option-radio"></span>PCI_DEVICE</button>
+                <button class="quiz-option" data-value="b" onclick="selectOption(this)"><span class="quiz-option-radio"></span>CUSTOM_PCI_&lt;vendor_id&gt;_&lt;product_id&gt;</button>
+                <button class="quiz-option" data-value="c" onclick="selectOption(this)"><span class="quiz-option-radio"></span>VGPU</button>
+              </div>
+              <div class="quiz-feedback"></div>
+            </div>
+
+            <div class="quiz-question-block" data-correct="b"
+                 data-explanation-right="It works on copy.deepcopy(self) so the host's real pools are untouched; real consumption happens in consume_requests during the claim — stats.py L784."
+                 data-explanation-wrong="No device is consumed at filter time and libvirt is not involved during scheduling.">
+              <div class="quiz-question">During scheduling, what does <code>PciDeviceStats.support_requests</code> actually do?</div>
+              <div class="quiz-options">
+                <button class="quiz-option" data-value="a" onclick="selectOption(this)"><span class="quiz-option-radio"></span>Permanently consumes the PCI devices on the host</button>
+                <button class="quiz-option" data-value="b" onclick="selectOption(this)"><span class="quiz-option-radio"></span>Deep-copies the stats and tries apply_requests, returning True/False without consuming</button>
+                <button class="quiz-option" data-value="c" onclick="selectOption(this)"><span class="quiz-option-radio"></span>Calls libvirt to verify the device exists</button>
+              </div>
+              <div class="quiz-feedback"></div>
+            </div>
+
+            <div class="quiz-question-block" data-correct="b"
+                 data-explanation-right="After binding, get_arqs_for_instance returns attach_handle_info (a PCI BDF) which _guest_add_accel_pci_devices turns into a LibvirtConfigGuestHostdevPCI — driver.py ~L7598."
+                 data-explanation-wrong="Cyborg, not the flavor or the device_spec whitelist, owns the device and supplies the address.">
+              <div class="quiz-question">How does a Cyborg-bound accelerator's PCI address reach libvirt?</div>
+              <div class="quiz-options">
+                <button class="quiz-option" data-value="a" onclick="selectOption(this)"><span class="quiz-option-radio"></span>Nova reads it from the flavor extra spec</button>
+                <button class="quiz-option" data-value="b" onclick="selectOption(this)"><span class="quiz-option-radio"></span>From the bound ARQ's attach_handle_info, used by _guest_add_accel_pci_devices</button>
+                <button class="quiz-option" data-value="c" onclick="selectOption(this)"><span class="quiz-option-radio"></span>From [pci]device_spec</button>
+              </div>
+              <div class="quiz-feedback"></div>
+            </div>
+
+            <button class="quiz-check-btn" onclick="checkQuiz('quiz1')">Check answers</button>
+            <button class="quiz-reset-btn" onclick="resetQuiz('quiz1')">Reset</button>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <h2 class="screen-heading">Match the code to its job</h2>
+          <p>Drag each Nova symbol onto the job it performs in the GPU/PCI flow.</p>
+          <div class="dnd-container" id="match1">
+            <div class="dnd-chips">
+              <div class="dnd-chip" draggable="true" data-answer="assignable">whitelist.device_assignable</div>
+              <div class="dnd-chip" draggable="true" data-answer="fromflavor">request.get_pci_requests_from_flavor</div>
+              <div class="dnd-chip" draggable="true" data-answer="consume">stats.consume_requests</div>
+              <div class="dnd-chip" draggable="true" data-answer="rp">PciResourceProvider</div>
+              <div class="dnd-chip" draggable="true" data-answer="hostdev">LibvirtConfigGuestHostdevPCI</div>
+            </div>
+            <div class="dnd-zones">
+              <div class="dnd-zone" data-correct="assignable"><div class="dnd-zone-label">Decides if a host device matches the admin whitelist</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="fromflavor"><div class="dnd-zone-label">Turns pci_passthrough:alias into InstancePCIRequests</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="consume"><div class="dnd-zone-label">Claims concrete PciDevice objects from pools during the claim</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="rp"><div class="dnd-zone-label">Maps PFs/VFs to Placement RPs and inventory</div><div class="dnd-zone-target">Drop here</div></div>
+              <div class="dnd-zone" data-correct="hostdev"><div class="dnd-zone-label">Emits the guest &lt;hostdev type=pci&gt; XML</div><div class="dnd-zone-target">Drop here</div></div>
+            </div>
+            <div style="margin-top: var(--space-6);">
+              <button class="btn btn-primary" onclick="checkDnD('match1')">Check matches</button>
+              <button class="btn" onclick="resetDnD('match1')">Reset</button>
+            </div>
+          </div>
+        </section>
+
+        <section class="screen animate-in">
+          <div class="callout callout-success">
+            <div class="callout-icon">🚀</div>
+            <div class="callout-content">
+              <span class="callout-title">You've traced a GPU into a guest</span>
+              <p>From a flavor alias to a <code>&lt;hostdev&gt;</code> in the guest XML: parsing in the API, optional modelling in Placement, filtering in the scheduler, a concrete claim by the PCI tracker, and a libvirt spawn — plus the vGPU and Cyborg branches. Four models, one pipeline.</p>
+            </div>
+          </div>
+        </section>
+      </div>
+    </div>
+  </section>
+
+  <div class="footer">
+    Traced from the OpenStack Nova source on branch <code>nectar/2024.1</code>. Code snippets are exact excerpts. Built in the codebase-to-course visual style.
+  </div>
+
+  </main>
+
+  <script>
+  (function () {
+    'use strict';
+    function $(sel, ctx) { return (ctx || document).querySelector(sel); }
+    function $$(sel, ctx) { return Array.from((ctx || document).querySelectorAll(sel)); }
+
+    /* ── NAV & PROGRESS ── */
+    const progressBar = $('#progress-bar');
+    const navDots = $$('.nav-dot');
+    const modules = $$('.module');
+
+    function updateProgress() {
+      if (!progressBar) return;
+      const scrollTop = window.scrollY;
+      const scrollHeight = document.documentElement.scrollHeight - window.innerHeight;
+      const pct = scrollHeight > 0 ? (scrollTop / scrollHeight) * 100 : 0;
+      progressBar.style.width = pct + '%';
+      progressBar.setAttribute('aria-valuenow', Math.round(pct));
+      updateNavDots();
+    }
+    function updateNavDots() {
+      const scrollMid = window.scrollY + window.innerHeight / 2;
+      modules.forEach((mod, i) => {
+        const dot = navDots[i];
+        if (!dot) return;
+        const top = mod.offsetTop;
+        const bottom = top + mod.offsetHeight;
+        if (scrollMid >= top && scrollMid < bottom) { dot.classList.add('active'); dot.classList.remove('visited'); }
+        else if (window.scrollY + window.innerHeight > top) { dot.classList.remove('active'); dot.classList.add('visited'); }
+        else { dot.classList.remove('active', 'visited'); }
+      });
+    }
+    window.addEventListener('scroll', () => requestAnimationFrame(updateProgress), { passive: true });
+    updateProgress();
+    navDots.forEach(dot => dot.addEventListener('click', () => {
+      const target = $('#' + dot.dataset.target);
+      if (target) target.scrollIntoView({ behavior: 'smooth' });
+    }));
+
+    /* ── KEYBOARD NAV ── */
+    function currentModuleIndex() {
+      const scrollMid = window.scrollY + window.innerHeight / 2;
+      for (let i = 0; i < modules.length; i++) {
+        const top = modules[i].offsetTop, bottom = top + modules[i].offsetHeight;
+        if (scrollMid >= top && scrollMid < bottom) return i;
+      }
+      return 0;
+    }
+    document.addEventListener('keydown', e => {
+      if (['INPUT', 'TEXTAREA', 'SELECT'].includes(e.target.tagName)) return;
+      if (e.key === 'ArrowDown' || e.key === 'ArrowRight') { const n = modules[currentModuleIndex() + 1]; if (n) { n.scrollIntoView({ behavior: 'smooth' }); e.preventDefault(); } }
+      if (e.key === 'ArrowUp' || e.key === 'ArrowLeft') { const p = modules[currentModuleIndex() - 1]; if (p) { p.scrollIntoView({ behavior: 'smooth' }); e.preventDefault(); } }
+    });
+
+    /* ── REVEAL ── */
+    const revealObserver = new IntersectionObserver(entries => {
+      entries.forEach(entry => { if (entry.isIntersecting) { entry.target.classList.add('visible'); revealObserver.unobserve(entry.target); } });
+    }, { rootMargin: '0px 0px -8% 0px', threshold: 0.08 });
+    $$('.animate-in').forEach(el => revealObserver.observe(el));
+    $$('.stagger-children').forEach(parent => Array.from(parent.children).forEach((child, i) => child.style.setProperty('--stagger-index', i)));
+
+    /* ── GLOSSARY ── */
+    let activeTooltip = null;
+    function positionTooltip(term, tip) {
+      const rect = term.getBoundingClientRect();
+      const tipWidth = Math.min(320, Math.max(200, window.innerWidth * 0.8));
+      let left = rect.left + rect.width / 2 - tipWidth / 2;
+      left = Math.max(8, Math.min(left, window.innerWidth - tipWidth - 8));
+      tip.style.left = left + 'px'; tip.style.width = tipWidth + 'px';
+      document.body.appendChild(tip);
+      const tipHeight = tip.offsetHeight;
+      if (rect.top - tipHeight - 12 < 0) { tip.style.top = (rect.bottom + 8) + 'px'; tip.classList.add('flip'); }
+      else { tip.style.top = (rect.top - tipHeight - 8) + 'px'; tip.classList.remove('flip'); }
+    }
+    function showTooltip(term, tip) {
+      if (activeTooltip && activeTooltip !== tip) { activeTooltip.classList.remove('visible'); activeTooltip.remove(); }
+      positionTooltip(term, tip);
+      requestAnimationFrame(() => tip.classList.add('visible'));
+      activeTooltip = tip;
+    }
+    function hideTooltip(tip) {
+      tip.classList.remove('visible');
+      setTimeout(() => { if (!tip.classList.contains('visible')) tip.remove(); }, 150);
+      if (activeTooltip === tip) activeTooltip = null;
+    }
+    $$('.term').forEach(term => {
+      const tip = document.createElement('span');
+      tip.className = 'term-tooltip';
+      tip.textContent = term.dataset.definition;
+      term.addEventListener('mouseenter', () => showTooltip(term, tip));
+      term.addEventListener('mouseleave', () => hideTooltip(tip));
+      term.addEventListener('click', e => { e.stopPropagation(); tip.classList.contains('visible') ? hideTooltip(tip) : showTooltip(term, tip); });
+    });
+    document.addEventListener('click', () => { if (activeTooltip) { activeTooltip.classList.remove('visible'); activeTooltip.remove(); activeTooltip = null; } });
+
+    /* ── QUIZ ── */
+    window.selectOption = function (btn) {
+      const block = btn.closest('.quiz-question-block');
+      $$('.quiz-option', block).forEach(o => o.classList.remove('selected'));
+      btn.classList.add('selected');
+    };
+    window.checkQuiz = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.quiz-question-block', container).forEach(q => {
+        const selected = $('.quiz-option.selected', q);
+        const feedback = $('.quiz-feedback', q);
+        const correct = q.dataset.correct;
+        const rightExp = q.dataset.explanationRight || '';
+        const wrongExp = q.dataset.explanationWrong || '';
+        if (!selected) { feedback.textContent = 'Pick an answer first!'; feedback.className = 'quiz-feedback show warning'; return; }
+        $$('.quiz-option', q).forEach(o => o.disabled = true);
+        if (selected.dataset.value === correct) {
+          selected.classList.add('correct');
+          feedback.innerHTML = '<strong>Exactly!</strong> ' + rightExp;
+          feedback.className = 'quiz-feedback show success';
+        } else {
+          selected.classList.add('incorrect');
+          const correctBtn = $('.quiz-option[data-value="' + correct + '"]', q);
+          if (correctBtn) correctBtn.classList.add('correct');
+          feedback.innerHTML = '<strong>Not quite.</strong> ' + wrongExp;
+          feedback.className = 'quiz-feedback show error';
+        }
+      });
+    };
+    window.resetQuiz = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.quiz-option', container).forEach(o => { o.classList.remove('selected', 'correct', 'incorrect'); o.disabled = false; });
+      $$('.quiz-feedback', container).forEach(f => { f.className = 'quiz-feedback'; f.textContent = ''; });
+    };
+
+    /* ── DND ── */
+    function initDnD(containerEl) {
+      if (!containerEl) return;
+      const chips = $$('.dnd-chip', containerEl);
+      const zones = $$('.dnd-zone', containerEl);
+      chips.forEach(chip => {
+        chip.addEventListener('dragstart', e => { e.dataTransfer.setData('text/plain', chip.dataset.answer); chip.classList.add('dragging'); });
+        chip.addEventListener('dragend', () => chip.classList.remove('dragging'));
+      });
+      zones.forEach(zone => {
+        const target = $('.dnd-zone-target', zone);
+        if (!target) return;
+        target.addEventListener('dragover', e => { e.preventDefault(); target.classList.add('drag-over'); });
+        target.addEventListener('dragleave', () => target.classList.remove('drag-over'));
+        target.addEventListener('drop', e => {
+          e.preventDefault(); target.classList.remove('drag-over');
+          const answer = e.dataTransfer.getData('text/plain');
+          const chip = $('.dnd-chip[data-answer="' + answer + '"]', containerEl);
+          if (!chip) return;
+          target.textContent = chip.textContent; target.dataset.placed = answer; chip.classList.add('placed');
+        });
+      });
+      chips.forEach(chip => {
+        chip.addEventListener('touchstart', e => {
+          e.preventDefault();
+          const touch = e.touches[0];
+          const ghost = chip.cloneNode(true);
+          ghost.style.cssText = 'position:fixed;z-index:9999;pointer-events:none;left:' + (touch.clientX - 40) + 'px;top:' + (touch.clientY - 20) + 'px;background:var(--color-accent);color:white;padding:0.5rem 1rem;border-radius:9999px;font-size:0.875rem;font-weight:600;opacity:0.85;';
+          document.body.appendChild(ghost); chip._ghost = ghost; chip._answer = chip.dataset.answer;
+        }, { passive: false });
+        chip.addEventListener('touchmove', e => {
+          e.preventDefault(); const touch = e.touches[0];
+          if (chip._ghost) { chip._ghost.style.left = (touch.clientX - 40) + 'px'; chip._ghost.style.top = (touch.clientY - 20) + 'px'; }
+          zones.forEach(z => { const t = $('.dnd-zone-target', z); if (t) t.classList.remove('drag-over'); });
+          const el = document.elementFromPoint(touch.clientX, touch.clientY);
+          const zt = el && el.closest('.dnd-zone-target'); if (zt) zt.classList.add('drag-over');
+        }, { passive: false });
+        chip.addEventListener('touchend', e => {
+          if (chip._ghost) { chip._ghost.remove(); chip._ghost = null; }
+          const touch = e.changedTouches[0];
+          const el = document.elementFromPoint(touch.clientX, touch.clientY);
+          const zt = el && el.closest('.dnd-zone-target');
+          if (zt) { zt.textContent = chip.textContent; zt.dataset.placed = chip._answer; chip.classList.add('placed'); }
+          zones.forEach(z => { const t = $('.dnd-zone-target', z); if (t) t.classList.remove('drag-over'); });
+        });
+      });
+    }
+    window.checkDnD = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.dnd-zone', container).forEach(zone => {
+        const target = $('.dnd-zone-target', zone);
+        if (!target || !target.dataset.placed) return;
+        if (target.dataset.placed === zone.dataset.correct) target.classList.add('correct-placed');
+        else target.classList.add('incorrect-placed');
+      });
+    };
+    window.resetDnD = function (containerId) {
+      const container = $('#' + containerId);
+      if (!container) return;
+      $$('.dnd-zone-target', container).forEach(t => { t.textContent = 'Drop here'; delete t.dataset.placed; t.classList.remove('correct-placed', 'incorrect-placed'); });
+      $$('.dnd-chip', container).forEach(c => c.classList.remove('placed', 'dragging'));
+    };
+    $$('.dnd-container').forEach(el => initDnD(el));
+
+    /* ── ARCH DIAGRAM ── */
+    $$('.arch-component').forEach(comp => {
+      comp.addEventListener('click', function () {
+        const diagram = this.closest('.arch-diagram');
+        $$('.arch-component', diagram).forEach(c => c.classList.remove('active'));
+        this.classList.add('active');
+        const descEl = $('.arch-description', diagram);
+        if (descEl) descEl.textContent = this.dataset.desc || '';
+      });
+    });
+
+    /* ── FLOW ANIMATION ── */
+    function initFlow(containerEl) {
+      if (!containerEl) return;
+      const stepsData = JSON.parse(containerEl.dataset.steps || '[]');
+      const labelEl = $('.flow-step-label', containerEl);
+      const progressEl = $('.flow-progress', containerEl);
+      const packet = $('.flow-packet', containerEl);
+      let step = 0;
+      function updateProgress() { if (progressEl) progressEl.textContent = 'Step ' + step + ' / ' + stepsData.length; }
+      function animatePacket(fromId, toId) {
+        if (!packet) return;
+        const fromEl = $('#' + fromId), toEl = $('#' + toId);
+        if (!fromEl || !toEl) return;
+        const fromR = fromEl.getBoundingClientRect(), toR = toEl.getBoundingClientRect(), contR = containerEl.getBoundingClientRect();
+        const fx = fromR.left + fromR.width / 2 - contR.left, fy = fromR.top + fromR.height / 2 - contR.top;
+        const tx = toR.left + toR.width / 2 - contR.left, ty = toR.top + toR.height / 2 - contR.top;
+        packet.style.setProperty('--packet-from-x', fx + 'px'); packet.style.setProperty('--packet-from-y', fy + 'px');
+        packet.style.setProperty('--packet-to-x', tx + 'px'); packet.style.setProperty('--packet-to-y', ty + 'px');
+        packet.style.display = 'block'; packet.style.animation = 'none'; packet.offsetHeight;
+        packet.style.animation = 'packetMove 0.8s var(--ease-in-out) forwards';
+        setTimeout(() => { packet.style.display = 'none'; }, 850);
+      }
+      function next() {
+        if (step >= stepsData.length) return;
+        const s = stepsData[step];
+        $$('.flow-actor', containerEl).forEach(a => a.classList.remove('active'));
+        if (s.highlight) { const hEl = $('#flow-' + s.highlight, containerEl); if (hEl) hEl.classList.add('active'); }
+        if (s.packet && s.from && s.to) animatePacket('flow-' + s.from, 'flow-' + s.to);
+        if (labelEl) labelEl.textContent = s.label || '';
+        step++; updateProgress();
+      }
+      function reset() {
+        step = 0;
+        $$('.flow-actor', containerEl).forEach(a => a.classList.remove('active'));
+        const apiEl = $('#flow-api', containerEl); if (apiEl) apiEl.classList.add('active');
+        if (labelEl) labelEl.textContent = 'Click "Next step" to begin the journey';
+        if (packet) packet.style.display = 'none';
+        updateProgress();
+      }
+      const nextBtn = $('.flow-next-btn', containerEl), resetBtn = $('.flow-reset-btn', containerEl);
+      if (nextBtn) nextBtn.addEventListener('click', next);
+      if (resetBtn) resetBtn.addEventListener('click', reset);
+      updateProgress();
+    }
+    $$('.flow-animation').forEach(el => initFlow(el));
+  })();
+  </script>
+</body>
+</html>
